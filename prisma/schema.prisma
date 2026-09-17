@@ -447,7 +447,12 @@ model Customer {
   @@index([city])
   @@index([assignedToId])
   @@index([createdAt])
-}
+model Quote {  id               String    @id @default(cuid())  number           String    @unique  customerId       String  title            String  status           String    @default("DRAFT") // DRAFT, SENT, ACCEPTED, DECLINED, EXPIRED  subtotal         Float     @default(0)  tax              Float     @default(0)  total            Float     @default(0)  currency         String    @default("ILS")  validUntil       DateTime?  notes            String?  convertedOrderId String?   @unique  createdAt        DateTime  @default(now())  updatedAt        DateTime  @updatedAt  createdBy        String?
+  customer Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)  items    QuoteItem[]
+  @@index([customerId])  @@index([status])}
+model QuoteItem {  id          String  @id @default(cuid())  quoteId     String  description String  quantity    Float   @default(1)  unitPrice   Float   @default(0)  total       Float   @default(0)
+  quote Quote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  @@index([quoteId])}}
 
 model CustomerContact {
   id         String   @id @default(cuid())
