@@ -44,7 +44,7 @@ export default function QuotesPage() {
   }, [status]);
 
   const exportColumns = [
-    { header: "מספר", key: "quoteNumber" },
+    { header: "מספר", key: "number" },
     { header: "כותרת", key: "title" },
     { header: "לקוח", key: "customerName" },
     { header: "סה״כ (₪)", key: "total" },
@@ -52,7 +52,7 @@ export default function QuotesPage() {
     { header: "תוקף עד", key: "validUntil" },
   ];
   const exportData = quotes.map((quote: Quote) => ({
-    quoteNumber: quote.quoteNumber,
+    number: quote.number,
     title: quote.title,
     customerName: quote.customer?.name || "",
     total: quote.total,
@@ -128,7 +128,7 @@ export default function QuotesPage() {
                 <tr key={quote.id} style={{ borderTop: "1px solid #E0D9C8" }}>
                   <td style={{ padding: 12 }}>
                     <Link href={`/quotes/${quote.id}`} style={{ color: "#C45A2A", fontWeight: 600, textDecoration: "none" }}>
-                      {quote.quoteNumber}
+                      {quote.number}
                     </Link>
                   </td>
                   <td style={{ padding: 12 }}>

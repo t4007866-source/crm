@@ -7,14 +7,15 @@ import { QuoteStatus } from "@prisma/client";
 
 export const dynamic = "force-dynamic";
 
-function computeTotals(items: any[], discount: number, vatRate: number) {
+const VAT_RATE = 0.17;
+
+function computeTotals(items: any[]) {
   const subtotal = items.reduce(
-    (sum, i) => sum + Number(i.quantity || 1) * Number(i.unitPrice || 0) - Number(i.discount || 0),
+    (sum, i) => sum + Number(i.quantity || 1) * Number(i.unitPrice || 0),
     0
   );
-  const afterDiscount = Math.max(subtotal - Number(discount || 0), 0);
-  const vat = afterDiscount * Number(vatRate ?? 0.17);
-  return { subtotal, total: afterDiscount + vat };
+  const tax = subtotal * VAT_RATE;
+  return { subtotal: Math.round(subtotal * 100) / 100, tax: Math.round(tax * 100) / 100, total: Math.round((subtotal + tax) * 100) / 100 };
 }
 
 export async function GET(req: NextRequest) {
@@ -34,14 +35,14 @@ export async function GET(req: NextRequest) {
       ...(q
         ? {
             OR: [
-              { quoteNumber: { contains: q, mode: "insensitive" } },
-              { title: { contains: q, mode: "insensitive" } },
-              { customer: { name: { contains: q, mode: "insensitive" } } },
+              { number: { contains: q, mode: "insensitive" as const } },
+              { title: { contains: q, mode: "insensitive" as const } },
+              { customer: { name: { contains: q, mode: "insensitive" as const } } },
             ],
           }
         : {}),
     },
-    include: { customer: true, lead: true, createdBy: true, items: true },
+    include: { customer: true, createdBy: true, items: true },
     orderBy: { createdAt: "desc" },
     take: 200,
   });
@@ -57,38 +58,36 @@ export async function POST(req: NextRequest) {
   if (!body.customerId || !body.title) return NextResponse.json({ error: "לקוח וכותרת הצעת מחיר הם חובה" }, { status: 400 });
 
   const items = Array.isArray(body.items)
-    ? body.items.filter((i: any) => i.name)
+    ? body.items
+        .filter((i: any) => i.description || i.name)
+        .map((i: any) => ({
+          description: i.description || i.name,
+          quantity: Number(i.quantity || 1),
+          unitPrice: Number(i.unitPrice || 0),
+        }))
     : [];
-  const discount = Number(body.discount || 0);
-  const vatRate = body.vatRate !== undefined ? Number(body.vatRate) : 0.17;
-  const { total } = computeTotals(items, discount, vatRate);
+  const totals = computeTotals(items);
 
   const quote = await prisma.$transaction(async (tx) => {
     const count = await tx.quote.count();
     const created = await tx.quote.create({
       data: {
-        quoteNumber: `QT-${new Date().getFullYear()}-${String(count + 1).padStart(4, "0")}`,
+        number: `QT-${new Date().getFullYear()}-${String(count + 1).padStart(4, "0")}`,
         customerId: body.customerId,
-        leadId: body.leadId || null,
         title: body.title,
         status: "DRAFT",
-        total,
-        discount,
-        vatRate,
+        subtotal: totals.subtotal,
+        tax: totals.tax,
+        total: totals.total,
         validUntil: body.validUntil ? new Date(body.validUntil) : null,
         notes: body.notes || null,
-        internalNotes: body.internalNotes || null,
         createdById: (session.user as any).id || null,
         items: {
           create: items.map((i: any) => ({
-            name: i.name,
-            productId: i.productId || null,
-            sku: i.sku || null,
-            kind: i.kind || "PRODUCT",
-            quantity: Number(i.quantity || 1),
-            unitPrice: Number(i.unitPrice || 0),
-            discount: Number(i.discount || 0),
-            lineTotal: Number(i.quantity || 1) * Number(i.unitPrice || 0) - Number(i.discount || 0),
+            description: i.description,
+            quantity: i.quantity,
+            unitPrice: i.unitPrice,
+            total: Math.round(i.quantity * i.unitPrice * 100) / 100,
           })),
         },
       },

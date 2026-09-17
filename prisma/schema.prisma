@@ -1201,17 +1201,17 @@ model IntegrationEvent {
 
 // Secure integration operations, outbound webhooks and retry queue.
 model IntegrationConnection {
-  id                String    @id @default(cuid())
-  provider          String
-  name              String
-  status            String    @default("DISCONNECTED")
-  mode              String    @default("SANDBOX")
-  encryptedConfig   String
-  lastHealthCheckAt DateTime?
-  lastError         String?
-  createdById       String?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  id                 String    @id @default(cuid())
+  provider           String
+  name               String
+  status             String    @default("DISCONNECTED")
+  mode               String    @default("SANDBOX")
+  encryptedConfig    String
+  lastHealthCheckAt  DateTime?
+  lastError          String?
+  createdById        String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   @@index([provider])
   @@index([status])
@@ -1519,38 +1519,38 @@ model StockReservation {
 }
 
 model TechnicianProfile {
-  id                 String                   @id @default(cuid())
-  userId             String                   @unique
-  user               User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  employeeNumber     String?                  @unique
+  id                 String                  @id @default(cuid())
+  userId             String                  @unique
+  user               User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  employeeNumber     String?                 @unique
   phone              String?
   profileImageUrl    String?
   identityNumber     String?
-  status             TechnicianProfileStatus  @default(ACTIVE)
+  status             TechnicianProfileStatus @default(ACTIVE)
   baseAddress        String?
   baseCity           String?
   baseRegion         String?
   baseLat            Float?
   baseLng            Float?
   serviceRadiusKm    Float?
-  preferredAreas     Json                     @default("[]")
-  unavailableAreas   Json                     @default("[]")
+  preferredAreas     Json                    @default("[]")
+  unavailableAreas   Json                    @default("[]")
   teamName           String?
   managerId          String?
   startedAt          DateTime?
   employmentType     String?
   notes              String?
   maxCallsPerDay     Int?
-  emergencyAvailable Boolean                  @default(false)
+  emergencyAvailable Boolean                 @default(false)
   skills             TechnicianSkill[]
   serviceAreas       TechnicianServiceArea[]
   availability       TechnicianAvailability[]
   locations          TechnicianLocation[]
-  assignments        TechnicianAssignment[]   @relation("TechnicianAssignmentAssignee")
+  assignments        TechnicianAssignment[]  @relation("TechnicianAssignmentAssignee")
   statusHistory      TechnicianStatusLog[]
   inventory          TechnicianInventory[]
-  createdAt          DateTime                 @default(now())
-  updatedAt          DateTime                 @updatedAt
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
 
   @@index([status])
   @@index([baseCity, baseRegion])
@@ -1627,15 +1627,15 @@ model TechnicianAssignment {
 }
 
 model TechnicianStatusLog {
-  id           String                   @id @default(cuid())
+  id          String                   @id @default(cuid())
   technicianId String
-  technician   TechnicianProfile        @relation(fields: [technicianId], references: [id], onDelete: Cascade)
-  oldStatus    TechnicianProfileStatus?
-  newStatus    TechnicianProfileStatus
-  changedById  String?
-  changedBy    User?                    @relation("TechnicianStatusChanger", fields: [changedById], references: [id], onDelete: SetNull)
-  reason       String?
-  createdAt    DateTime                 @default(now())
+  technician  TechnicianProfile        @relation(fields: [technicianId], references: [id], onDelete: Cascade)
+  oldStatus   TechnicianProfileStatus?
+  newStatus   TechnicianProfileStatus
+  changedById String?
+  changedBy   User?                    @relation("TechnicianStatusChanger", fields: [changedById], references: [id], onDelete: SetNull)
+  reason      String?
+  createdAt   DateTime                 @default(now())
 
   @@index([technicianId, createdAt])
 }
@@ -1653,3 +1653,4 @@ model TechnicianInventory {
   @@unique([technicianId, productId])
   @@index([productId])
 }
+

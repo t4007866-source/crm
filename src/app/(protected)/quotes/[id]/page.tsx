@@ -91,7 +91,7 @@ export default function QuoteDetailPage() {
       </Link>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "12px 0 16px", flexWrap: "wrap", gap: 12 }}>
         <h1 style={{ fontSize: 24, color: "#172B4D" }}>
-          {quote.quoteNumber} — {quote.title}
+          {quote.number} — {quote.title}
         </h1>
         <span style={{ background: "#F4F0E8", border: "1px solid #E0D9C8", padding: "4px 12px", borderRadius: 999, fontWeight: 700, color: "#172B4D" }}>
           {STATUS_LABELS[quote.status] || quote.status}

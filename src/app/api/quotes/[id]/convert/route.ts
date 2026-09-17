@@ -6,7 +6,7 @@ import { can } from "@/lib/permissions";
 
 export const dynamic = "force-dynamic";
 
-// המרת הצעת מחיר להזמנה — יוצרת Order + OrderItem ומסמנת את ההצעה כ-Accepted
+// המרת הצעת מחיר להזמנה — יוצרת Order + OrderItem ומסמן את ההצעה כ-Accepted
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getServerSession(authOptions);
   if (!session) return NextResponse.json({ error: "לא מחובר" }, { status: 401 });
@@ -26,25 +26,20 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
       data: {
         orderNumber: `ORD-${new Date().getFullYear()}-${String(count + 1).padStart(4, "0")}`,
         customerId: quote.customerId,
-        leadId: quote.leadId,
         title: quote.title,
         status: "CONFIRMED",
         total: quote.total,
-        discount: quote.discount,
+        discount: Math.max(0, quote.subtotal - quote.total),
         paymentStatus: "PENDING",
         notes: quote.notes,
-        internalNotes: quote.internalNotes,
-        source: quote.quoteNumber,
+        source: quote.number,
         items: {
           create: quote.items.map((i) => ({
-            name: i.name,
-            productId: i.productId,
-            sku: i.sku,
-            quantity: i.quantity,
+            name: i.description,
+            quantity: Math.round(i.quantity) || 1,
             unitPrice: i.unitPrice,
-            discount: i.discount,
-            vatRate: quote.vatRate,
-            lineTotal: i.lineTotal,
+            vatRate: 0.17,
+            lineTotal: i.total,
           })),
         },
       },
@@ -52,7 +47,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
 
     await tx.quote.update({
       where: { id: quote.id },
-      data: { status: "ACCEPTED", acceptedAt: quote.acceptedAt ?? new Date(), convertedOrderId: created.id },
+      data: { status: "ACCEPTED", convertedOrderId: created.id },
     });
 
     return created;
