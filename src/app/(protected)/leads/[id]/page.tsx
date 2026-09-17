@@ -1,34 +1,104 @@
 "use client";
+
 import { useEffect, useState } from "react";
 import Link from "next/link";
 
+type Lead = any;
+
 export default function LeadDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const [lead, setLead] = useState<any>(null);
+  const [lead, setLead] = useState<Lead | null>(null);
+  const [edit, setEdit] = useState<Lead | null>(null);
   const [tab, setTab] = useState("details");
-  const [edit, setEdit] = useState<any>(null);
-  const [message, setMessage] = useState("");
   const [id, setId] = useState("");
-  const [converting, setConverting] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
 
-  const reload = (leadId: string) => fetch(`/api/leads/${leadId}`).then((r) => r.json()).then((d) => { setLead(d); setEdit({ ...d, interests: Array.isArray(d.interests) ? d.interests.join(", ") : "", utm_source: d.utmData?.utm_source || "", utm_campaign: d.utmData?.utm_campaign || "", utm_adset: d.utmData?.utm_adset || "" }); });
-  useEffect(() => { params.then(({ id: value }) => { setId(value); reload(value); }); }, [params]);
-  if (!lead || !edit) return <div className="p-8 text-center">טוען...</div>;
+  const reload = async (leadId: string) => {
+    const response = await fetch(`/api/leads/${leadId}`, { cache: "no-store" });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "לא ניתן לטעון את הליד");
+    setLead(data);
+    setEdit({
+      ...data,
+      interests: Array.isArray(data.interests) ? data.interests.join(", ") : "",
+      utm_source: data.utmData?.utm_source || "",
+      utm_campaign: data.utmData?.utm_campaign || "",
+      utm_adset: data.utmData?.utm_adset || "",
+    });
+  };
 
-  const save = async (e: React.FormEvent) => { e.preventDefault(); const body = { ...edit, value: edit.value === "" ? null : Number(edit.value), interests: edit.interests.split(",").map((x: string) => x.trim()).filter(Boolean), utmData: { utm_source: edit.utm_source, utm_campaign: edit.utm_campaign, utm_adset: edit.utm_adset } }; const r = await fetch(`/api/leads/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); setMessage(r.ok ? "פרטי הליד עודכנו" : "שגיאה בעדכון"); if (r.ok) { setTab("details"); reload(id); } };
-  const convert = async () => { if (!window.confirm("להמיר את הליד ללקוח חדש? ייווצר כרטיס לקוח ורצף המעקב ייעצר.")) return; setConverting(true); const r = await fetch(`/api/leads/${id}/convert`, { method: "POST" }); const d = await r.json(); setConverting(false); if (!r.ok) { setMessage(d.error || "לא ניתן להמיר את הליד"); return; } setMessage("הליד הומר בהצלחה ללקוח"); setTimeout(() => { window.location.href = `/customers/${d.customer.id}`; }, 600); };
-  const set = (k: string, v: string) => setEdit({ ...edit, [k]: v });
+  useEffect(() => {
+    params.then(({ id: value }) => {
+      setId(value);
+      reload(value).catch((e) => setError(e.message));
+    });
+  }, [params]);
 
-  return <div className="max-w-6xl mx-auto space-y-4">
-    <Link href="/leads" className="text-sm" style={{ color: "var(--rust)" }}>← חזרה ללידים</Link>
-    <div className="card p-5 flex justify-between items-start"><div><h1 className="text-3xl font-bold">{lead.name}</h1><p style={{ color: "var(--muted)" }}>{lead.phone || "ללא טלפון"} · {lead.email || "ללא אימייל"} · {lead.source}</p></div><div className="flex gap-2 flex-wrap justify-end"><a href={`tel:${lead.phone}`} className="btn-primary">חייג</a><a href={`https://wa.me/${String(lead.phone || "").replace(/\D/g, "")}`} target="_blank" rel="noreferrer" className="btn-accent">WhatsApp</a><button onClick={() => setTab("edit")} className="btn-primary">ערוך פרטים</button>{lead.stage !== "WON" && <button onClick={convert} disabled={converting || !lead.phone} className="btn-accent">{converting ? "ממיר..." : "המר ללקוח"}</button>}{lead.convertedCustomerId && <Link href={`/customers/${lead.convertedCustomerId}`} className="btn-primary">פתח לקוח</Link>}</div></div>
-    {lead.stage === "WON" && <div className="p-3 rounded" style={{ background: "#e8f5e9", color: "#2e7d32" }}>הליד הומר ללקוח. ניתן לפתוח את כרטיס הלקוח מהכפתור למעלה.</div>}
-    {message && <div className="p-3 rounded" style={{ background: "#e8f5e9", color: "#2e7d32" }}>{message}</div>}
-    <div className="card p-2 flex gap-1 flex-wrap">{[["details", "פרטי ליד"], ["edit", "עריכת ליד"], ["log", "שיחות והערות"], ["followup", "Follow-up"], ["calendar", "מועדי קשר"]].map(([x, label]) => <button key={x} onClick={() => setTab(x)} className="px-4 py-2 rounded text-sm" style={{ background: tab === x ? "var(--ink)" : "transparent", color: tab === x ? "#fff" : "var(--muted)" }}>{label}</button>)}</div>
-    <div className="card p-5">{tab === "details" && <Details lead={lead} />}{tab === "edit" && <EditForm edit={edit} set={set} save={save} />}{tab === "log" && <Activity lead={lead} id={id} reload={() => reload(id)} />}{tab === "followup" && <div>{lead.followUps?.map((f: any) => <div key={f.id} className="border-b py-2 text-sm">ניסיון {f.attemptNumber} · {f.channel} · {f.status} · {new Date(f.scheduledAt).toLocaleString("he-IL")}</div>)}</div>}{tab === "calendar" && <div>{lead.calendarEvents?.map((e: any) => <div key={e.id} className="border-b py-2 text-sm">{e.title} · {new Date(e.startAtUtc).toLocaleString("he-IL")} · יומן לידים</div>)}</div>}</div>
+  if (error) return <div dir="rtl" className="p-8 text-center text-red-700">{error}</div>;
+  if (!lead || !edit) return <div dir="rtl" className="p-8 text-center">טוען...</div>;
+
+  const setField = (key: string, value: string) => setEdit({ ...edit, [key]: value });
+
+  const save = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setBusy(true); setMessage(""); setError("");
+    const body = {
+      ...edit,
+      value: edit.value === "" ? null : Number(edit.value),
+      interests: String(edit.interests || "").split(",").map((x: string) => x.trim()).filter(Boolean),
+      utmData: { utm_source: edit.utm_source || "", utm_campaign: edit.utm_campaign || "", utm_adset: edit.utm_adset || "" },
+    };
+    const response = await fetch(`/api/leads/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const data = await response.json();
+    setBusy(false);
+    if (!response.ok) { setError(data.error || "שגיאה בעדכון"); return; }
+    setMessage("פרטי הליד עודכנו ונרשמו ביומן הביקורת"); setTab("details"); await reload(id);
+  };
+
+  const remove = async () => {
+    if (!window.confirm("האם למחוק את הליד? הפעולה בלתי הפיכה וכל היסטוריית הליד תימחק.")) return;
+    setBusy(true); setError("");
+    const response = await fetch(`/api/leads/${id}`, { method: "DELETE" });
+    const data = await response.json();
+    setBusy(false);
+    if (!response.ok) { setError(data.error || "לא ניתן למחוק את הליד"); return; }
+    window.location.href = "/leads";
+  };
+
+  const convert = async () => {
+    if (!window.confirm("להמיר את הליד ללקוח? רצף ה-Follow-up ייעצר.")) return;
+    setBusy(true);
+    const response = await fetch(`/api/leads/${id}/convert`, { method: "POST" });
+    const data = await response.json(); setBusy(false);
+    if (!response.ok) { setError(data.error || "לא ניתן להמיר את הליד"); return; }
+    window.location.href = `/customers/${data.customer.id}`;
+  };
+
+  return <div dir="rtl" className="max-w-6xl mx-auto space-y-4">
+    <Link href="/leads" className="text-sm" style={{ color: "var(--rust)" }}>חזרה ללידים ←</Link>
+    <div className="card p-5 flex justify-between items-start gap-4 flex-wrap">
+      <div><h1 className="text-3xl font-bold">{lead.name}</h1><p style={{ color: "var(--muted)" }}>{lead.phone || "ללא טלפון"} · {lead.email || "ללא אימייל"} · {lead.source}</p>{lead.customer && <p className="text-sm mt-2">מקושר ללקוח: <Link className="underline" href={`/customers/${lead.customer.id}`}>{lead.customer.name}</Link></p>}</div>
+      <div className="flex gap-2 flex-wrap justify-end"><a href={`tel:${lead.phone || ""}`} className="btn-primary">חייג</a><a href={`https://wa.me/${String(lead.phone || "").replace(/\D/g, "")}`} target="_blank" rel="noreferrer" className="btn-accent">WhatsApp</a><button onClick={() => setTab("edit")} className="btn-primary">ערוך פרטים</button>{lead.stage !== "WON" && <button onClick={convert} disabled={busy || !lead.phone} className="btn-accent">המר ללקוח</button>}<button onClick={remove} disabled={busy || lead.stage === "WON" || Boolean(lead.convertedCustomerId)} className="px-4 py-2 rounded bg-red-700 text-white disabled:opacity-40">מחק ליד</button></div>
+    </div>
+    {message && <div className="p-3 rounded bg-green-100 text-green-800">{message}</div>}
+    {error && <div className="p-3 rounded bg-red-100 text-red-800">{error}</div>}
+    <div className="card p-2 flex gap-1 flex-wrap">{[["details", "פרטי ליד"], ["edit", "עריכת ליד"], ["log", "שיחות והערות"], ["followup", "Follow-up"], ["calendar", "מועדי קשר"]].map(([value, label]) => <button key={value} onClick={() => setTab(value)} className="px-4 py-2 rounded text-sm" style={{ background: tab === value ? "var(--ink)" : "transparent", color: tab === value ? "#fff" : "var(--muted)" }}>{label}</button>)}</div>
+    <div className="card p-5">
+      {tab === "details" && <Details lead={lead} />}
+      {tab === "edit" && <EditForm edit={edit} set={setField} save={save} busy={busy} />}
+      {tab === "log" && <Activity lead={lead} id={id} reload={() => reload(id)} />}
+      {tab === "followup" && <div>{lead.followUps?.length ? lead.followUps.map((item: any) => <div key={item.id} className="border-b py-2 text-sm">ניסיון {item.attemptNumber} · {item.channel} · {item.status} · {new Date(item.scheduledAt).toLocaleString("he-IL")}</div>) : "אין פעולות Follow-up"}</div>}
+      {tab === "calendar" && <div>{lead.calendarEvents?.length ? lead.calendarEvents.map((item: any) => <div key={item.id} className="border-b py-2 text-sm">{item.title} · {new Date(item.startAtUtc).toLocaleString("he-IL")}</div>) : "אין מועדי קשר"}</div>}
+    </div>
   </div>;
 }
-function Details({ lead }: { lead: any }) { const rows = [["שם", lead.name], ["טלפון", lead.phone || "—"], ["אימייל", lead.email || "—"], ["עיר", lead.city || "—"], ["חברה", lead.company || "—"], ["מקור", lead.source], ["עניין", Array.isArray(lead.interests) ? lead.interests.join(", ") : "—"], ["מצב נוכחי", lead.currentSystem || "—"], ["סטטוס", lead.stage], ["Confidence", lead.confidence], ["ערך", lead.value ? `₪${lead.value.toLocaleString()}` : "—"], ["UTM", JSON.stringify(lead.utmData || {})]]; return <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">{rows.map(([l, v]) => <div key={l}><div className="text-xs" style={{ color: "var(--muted)" }}>{l}</div><div>{v}</div></div>)}</div>; }
-function EditForm({ edit, set, save }: { edit: any; set: (k: string, v: string) => void; save: (e: React.FormEvent) => void }) { return <form onSubmit={save} className="grid grid-cols-2 gap-4"><Field l="שם" v={edit.name} set={v => set("name", v)} /><Field l="טלפון" v={edit.phone || ""} set={v => set("phone", v)} /><Field l="אימייל" v={edit.email || ""} set={v => set("email", v)} /><Field l="חברה" v={edit.company || ""} set={v => set("company", v)} /><Field l="עיר" v={edit.city || ""} set={v => set("city", v)} /><Field l="תחומי עניין" v={edit.interests} set={v => set("interests", v)} /><Field l="מצב נוכחי" v={edit.currentSystem || ""} set={v => set("currentSystem", v)} /><Field l="סכום הצעה" v={edit.value || ""} set={v => set("value", v)} /><Field l="utm_source" v={edit.utm_source} set={v => set("utm_source", v)} /><Field l="utm_campaign" v={edit.utm_campaign} set={v => set("utm_campaign", v)} /><label className="text-sm">סטטוס<select className="input-field" value={edit.stage} onChange={e => set("stage", e.target.value)}><option value="NEW">חדש</option><option value="CONTACTED">בשיחה</option><option value="QUALIFIED">מוכשר</option><option value="PROPOSAL">נשלחה הצעה</option><option value="WON">סגר והזמין</option><option value="LOST">לא רלוונטי</option></select></label><label className="text-sm">Confidence<select className="input-field" value={edit.confidence} onChange={e => set("confidence", e.target.value)}><option>LOW</option><option>MEDIUM</option><option>HIGH</option></select></label><button className="btn-accent col-span-2">שמור שינויים</button></form>; }
-function Field({ l, v, set }: { l: string; v: string; set: (v: string) => void }) { return <label className="text-sm">{l}<input className="input-field" value={v} onChange={e => set(e.target.value)} /></label>; }
-function Activity({ lead, id, reload }: { lead: any; id: string; reload: () => void }) { const [body, setBody] = useState(""); const [subject, setSubject] = useState(""); const submit = async (e: React.FormEvent) => { e.preventDefault(); await fetch("/api/lead-activities", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ leadId: id, type: "NOTE", subject, body }) }); setBody(""); setSubject(""); reload(); }; return <div className="space-y-4"><form onSubmit={submit} className="space-y-2"><input className="input-field" placeholder="נושא" value={subject} onChange={e => setSubject(e.target.value)} required /><textarea className="input-field" placeholder="מה דובר עם הלקוח?" value={body} onChange={e => setBody(e.target.value)} required /><button className="btn-accent">שמור הערה</button></form>{lead.activities?.map((a: any) => <div key={a.id} className="border-b pb-2 text-sm" style={{ borderColor: "var(--border)" }}><strong>{a.subject}</strong><div>{a.body}</div><small>{new Date(a.createdAt).toLocaleString("he-IL")}</small></div>)}</div>; }
+
+function Details({ lead }: { lead: Lead }) { const rows = [["שם", lead.name], ["טלפון", lead.phone || "—"], ["אימייל", lead.email || "—"], ["עיר", lead.city || "—"], ["חברה", lead.company || "—"], ["מקור", lead.source], ["עניין", Array.isArray(lead.interests) ? lead.interests.join(", ") : "—"], ["מצב נוכחי", lead.currentSystem || "—"], ["סטטוס", lead.stage], ["Confidence", lead.confidence], ["ערך", lead.value ? `₪${lead.value.toLocaleString()}` : "—"], ["נוצר בתאריך", new Date(lead.createdAt).toLocaleString("he-IL")]]; return <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">{rows.map(([label, value]) => <div key={label}><div className="text-xs" style={{ color: "var(--muted)" }}>{label}</div><div>{value}</div></div>)}</div>; }
+
+function EditForm({ edit, set, save, busy }: { edit: Lead; set: (key: string, value: string) => void; save: (event: React.FormEvent) => void; busy: boolean }) { return <form onSubmit={save} className="grid grid-cols-1 md:grid-cols-2 gap-4"><Field label="שם" value={edit.name} set={(v) => set("name", v)} required /><Field label="טלפון" value={edit.phone || ""} set={(v) => set("phone", v)} required /><Field label="אימייל" value={edit.email || ""} set={(v) => set("email", v)} /><Field label="חברה" value={edit.company || ""} set={(v) => set("company", v)} /><Field label="עיר" value={edit.city || ""} set={(v) => set("city", v)} /><Field label="תחומי עניין" value={edit.interests || ""} set={(v) => set("interests", v)} /><Field label="מצב נוכחי" value={edit.currentSystem || ""} set={(v) => set("currentSystem", v)} /><Field label="סכום הצעה" value={edit.value ?? ""} set={(v) => set("value", v)} type="number" /><Field label="utm_source" value={edit.utm_source || ""} set={(v) => set("utm_source", v)} /><Field label="utm_campaign" value={edit.utm_campaign || ""} set={(v) => set("utm_campaign", v)} /><label className="text-sm">סטטוס<select className="input-field" value={edit.stage} onChange={(e) => set("stage", e.target.value)}><option value="NEW">חדש</option><option value="CONTACTED">בשיחה</option><option value="QUALIFIED">מוכשר</option><option value="PROPOSAL">נשלחה הצעה</option><option value="NEGOTIATION">משא ומתן</option><option value="WON">סגר והזמין</option><option value="LOST">לא רלוונטי</option></select></label><label className="text-sm">Confidence<select className="input-field" value={edit.confidence} onChange={(e) => set("confidence", e.target.value)}><option>LOW</option><option>MEDIUM</option><option>HIGH</option></select></label><button disabled={busy} className="btn-accent md:col-span-2 disabled:opacity-50">{busy ? "שומר..." : "שמור שינויים"}</button></form>; }
+
+function Field({ label, value, set, type = "text", required = false }: { label: string; value: string | number; set: (value: string) => void; type?: string; required?: boolean }) { return <label className="text-sm">{label}<input required={required} type={type} className="input-field" value={value} onChange={(e) => set(e.target.value)} /></label>; }
+
+function Activity({ lead, id, reload }: { lead: Lead; id: string; reload: () => Promise<void> }) { const [subject, setSubject] = useState(""); const [body, setBody] = useState(""); const [saving, setSaving] = useState(false); const submit = async (event: React.FormEvent) => { event.preventDefault(); setSaving(true); const response = await fetch("/api/lead-activities", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ leadId: id, type: "NOTE", subject, body }) }); const data = await response.json(); setSaving(false); if (!response.ok) return; setSubject(""); setBody(""); await reload(); }; return <div className="space-y-4"><form onSubmit={submit} className="space-y-2"><input className="input-field" placeholder="נושא ההערה" value={subject} onChange={(e) => setSubject(e.target.value)} required /><textarea className="input-field" placeholder="תוכן ההערה" value={body} onChange={(e) => setBody(e.target.value)} required /><button disabled={saving} className="btn-accent disabled:opacity-50">{saving ? "שומר..." : "שמור הערה"}</button></form>{lead.activities?.length ? lead.activities.map((activity: any) => <div key={activity.id} className="border-b pb-3 text-sm" style={{ borderColor: "var(--border)" }}><strong>{activity.subject}</strong><div>{activity.body}</div><small style={{ color: "var(--muted)" }}>{new Date(activity.createdAt).toLocaleString("he-IL")} · {activity.createdBy?.name || activity.createdById || "מערכת"}</small></div>) : <div style={{ color: "var(--muted)" }}>אין היסטוריית פעילות</div>}</div>; }
 

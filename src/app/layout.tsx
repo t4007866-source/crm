@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "שי סחר — מערכת ניהול",
+  title: "underbar — מערכת ניהול",
   description: "מערכת CRM לניהול לקוחות, לידים ומכירות",
 };
 
@@ -23,4 +23,5 @@ export default function RootLayout({
     </html>
   );
 }
+
 

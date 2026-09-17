@@ -9,6 +9,30 @@ async function main() {
   const adminPassword = await hash("ChangeMe!2026", 12);
   const demoPassword = await hash("Demo!2026", 12);
 
+  // קטלוג הרשאות תוספתי — אינו משנה תפקידים או הרשאות קיימים
+  const permissionKeys = [
+    "dashboard.view",
+    "customers.view", "customers.create", "customers.edit", "customers.delete", "customers.export", "customers.view_sensitive",
+    "leads.view", "leads.create", "leads.edit", "leads.assign", "leads.convert", "leads.export", "leads.delete",
+    "orders.view", "orders.create", "orders.edit", "orders.delete", "orders.export", "orders.approve",
+    "inventory.view", "inventory.create", "inventory.edit", "inventory.delete", "inventory.export", "inventory.approve",
+    "serviceCalendar.view", "serviceCalendar.create", "serviceCalendar.edit", "serviceCalendar.delete", "serviceCalendar.export", "serviceCalendar.assign",
+    "serviceMap.view", "serviceMap.export", "fieldTech.view", "fieldTech.create", "fieldTech.edit", "fieldTech.assign", "fieldTech.export",
+    "tasks.view", "tasks.create", "tasks.edit", "tasks.delete", "tasks.assign", "tasks.export",
+    "automations.view", "automations.create", "automations.edit", "automations.delete", "automations.pause", "automations.approve",
+    "integrations.view", "integrations.create", "integrations.edit", "integrations.delete", "integrations.manage",
+    "reports.view", "reports.create", "reports.edit", "reports.delete", "reports.export", "reports.view_sensitive",
+    "ai.view", "ai.create", "ai.approve", "access.view", "access.manage", "users.view", "users.create", "users.edit", "users.delete", "users.manage",
+    "whatsapp.send_manual", "whatsapp.send_automated", "whatsapp.approve_template",
+  ];
+  for (const key of permissionKeys) {
+    await prismaClient.permissionDefinition.upsert({
+      where: { key },
+      update: {},
+      create: { key, category: key.split(".")[0], isSensitive: key.endsWith("view_sensitive") },
+    });
+  }
+
   // משתמשים
   const admin = await prismaClient.user.upsert({
     where: { email: "admin@shisachar.co.il" },
@@ -103,6 +127,7 @@ main()
   .finally(async () => {
     await prismaClient.$disconnect();
   });
+
 
 
 

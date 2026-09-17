@@ -13,16 +13,22 @@ export async function GET() {
     return NextResponse.json({ error: "אין הרשאה" }, { status: 403 });
   }
 
-  const [appointments, calls] = await Promise.all([
+  const [appointments, calls, tasks] = await Promise.all([
     prisma.appointment.findMany({
-      include: { customer: true, installedSystem: true },
+      include: { customer: true, installedSystem: true, technician: { select: { id: true, name: true, phone: true } } },
       orderBy: { startAtUtc: "asc" },
       take: 500,
     }),
     prisma.serviceCall.findMany({
-      include: { customer: true, installedSystem: true },
+      include: { customer: true, installedSystem: true, technician: { select: { id: true, name: true, phone: true } } },
       orderBy: { scheduledAt: "asc" },
       take: 500,
+    }),
+    prisma.serviceTask.findMany({
+      where: { scheduledStart: { not: null } },
+      include: { customer: true, technician: { select: { id: true, name: true, phone: true } } },
+      orderBy: { scheduledStart: "asc" },
+      take: 1000,
     }),
   ]);
 
@@ -36,6 +42,8 @@ export async function GET() {
     status: item.status,
     customer: item.customer,
     system: item.installedSystem,
+    technician: item.technician,
+    technicianId: item.technicianId,
   }));
 
   const callEvents = calls
@@ -50,8 +58,29 @@ export async function GET() {
       status: item.status,
       customer: item.customer,
       system: item.installedSystem,
+      technician: item.technician,
+      technicianId: item.technicianId,
     }));
 
-  return NextResponse.json({ events: [...appointmentEvents, ...callEvents] });
+  const taskEvents = tasks.map((item) => ({
+    id: `task-${item.id}`,
+    sourceId: item.id,
+    kind: item.type === "INSTALLATION" ? "INSTALLATION" : item.type === "FILTER_REPLACEMENT" ? "FILTER_REPLACEMENT" : "TECHNICIAN_SERVICE",
+    title: item.title,
+    start: item.scheduledStart,
+    end: item.scheduledEnd,
+    status: item.status,
+    customer: item.customer,
+    system: null,
+    technician: item.technician,
+    technicianId: item.technicianId,
+    region: item.region,
+  }));
+
+  return NextResponse.json({ events: [...appointmentEvents, ...callEvents, ...taskEvents] });
 }
+
+
+
+
 
