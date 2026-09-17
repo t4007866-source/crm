@@ -1,83 +1,294 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-declare global { interface Window { google: any; initShiSacharMap?: () => void; } }
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
-const statusColors: Record<string, string> = { ACTIVE: "#2e7d32", PROSPECT: "#1565c0", LEAD: "#ef6c00", CHURNED: "#757575" };
-const statusLabels: Record<string, string> = { ACTIVE: "פעיל", PROSPECT: "פרוספקט", LEAD: "ליד", CHURNED: "עזב" };
-const statusOptions = [
-  { value: "", label: "הכל" },
-  { value: "ACTIVE", label: "פעיל" },
-  { value: "PROSPECT", label: "פרוספקט" },
-  { value: "LEAD", label: "ליד" },
-  { value: "CHURNED", label: "עזב" },
-];
-
-export default function ServiceMapPage() {
-  const mapRef = useRef<HTMLDivElement>(null);
-  const mapInstance = useRef<any>(null);
-  const markers = useRef<any[]>([]);
-  const [customers, setCustomers] = useState<any[]>([]);
-  const [selected, setSelected] = useState<any>(null);
-  const [query, setQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
-  const [error, setError] = useState("");
-  const [ready, setReady] = useState(false);
-
-  useEffect(() => {
-    fetch("/api/service-map").then(async (r) => { const d = await r.json(); if (!r.ok) throw new Error(d.error || "לא ניתן לטעון נתוני מפה"); return d; }).then((d) => setCustomers(d.customers || [])).catch((e) => setError(e.message));
-  }, []);
-
-  useEffect(() => {
-    const key = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
-    if (!key) { setError("חסר NEXT_PUBLIC_GOOGLE_MAPS_API_KEY בקובץ .env"); return; }
-    if (window.google?.maps) { setReady(true); return; }
-    const existing = document.getElementById("google-maps-script");
-    if (existing) { existing.addEventListener("load", () => setReady(true)); return; }
-    const script = document.createElement("script");
-    script.id = "google-maps-script";
-    script.async = true;
-    script.defer = true;
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}`;
-    script.onload = () => setReady(true);
-    script.onerror = () => setError("טעינת Google Maps נכשלה. בדוק את המפתח וההרשאות ב-Google Cloud.");
-    document.head.appendChild(script);
-  }, []);
-
-  useEffect(() => {
-    if (!ready || !mapRef.current) return;
-    const center = { lat: 31.9, lng: 34.8 };
-    mapInstance.current = new window.google.maps.Map(mapRef.current, { center, zoom: 8, mapTypeControl: false, streetViewControl: false, fullscreenControl: true });
-  }, [ready]);
-
-  useEffect(() => {
-    if (!mapInstance.current || !window.google?.maps) return;
-    markers.current.forEach((m) => m.setMap(null)); markers.current = [];
-    const visible = customers.filter((c) => {
-      const matchesStatus = !statusFilter || c.status === statusFilter;
-      const matchesQuery =
-        !query ||
-        `${c.name} ${c.company || ""} ${c.city || ""}`
-          .toLowerCase()
-          .includes(query.toLowerCase());
-      return matchesStatus && matchesQuery;
-    });
-    visible.forEach((c) => {
-      const marker = new window.google.maps.Marker({ map: mapInstance.current, position: { lat: Number(c.lat), lng: Number(c.lng) }, title: c.name, icon: { path: window.google.maps.SymbolPath.CIRCLE, scale: 9, fillColor: statusColors[c.status] || "#777", fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2 } });
-      marker.addListener("click", () => setSelected(c)); markers.current.push(marker);
-    });
-    if (visible.length) { const bounds = new window.google.maps.LatLngBounds(); visible.forEach((c) => bounds.extend({ lat: Number(c.lat), lng: Number(c.lng) })); mapInstance.current.fitBounds(bounds); }
-  }, [customers, query, statusFilter, ready]);
-
-  return <div className="space-y-4"><div className="flex justify-between items-center"><div><h1 className="text-2xl font-bold">מפת שירות</h1><p className="text-sm" style={{ color: "var(--muted)" }}>לקוחות, קריאות שירות וניווט</p></div><Link href="/service-calendar" className="btn-primary">יומן שירות</Link></div>{error && <div className="p-3 rounded" style={{ background: "#fff3e0", color: "#bf360c" }}>{error}</div>}<div className="flex flex-col gap-3"><div className="flex gap-3 flex-wrap items-center"><input className="input-field" placeholder="חיפוש לקוח או עיר" value={query} onChange={(e) => setQuery(e.target.value)} style={{ maxWidth: 320 }} /><span className="text-sm" style={{ color: "var(--muted)" }}>{customers.length} לקוחות עם מיקום</span></div><div className="flex gap-2 flex-wrap items-center" role="group" aria-label="סינון לפי סטטוס לקוח"><span className="text-sm font-medium">סטטוס:</span>{statusOptions.map((option) => { const active = statusFilter === option.value; return <button key={option.value || "all"} type="button" onClick={() => setStatusFilter(option.value)} aria-pressed={active} className="px-3 py-1.5 rounded-full text-sm transition-colors" style={{ background: active ? (option.value ? statusColors[option.value] : "var(--ink)") : "transparent", color: active ? "#fff" : "var(--ink)", border: "1px solid var(--border)" }}>{option.label}</button>; })}</div></div><div className="grid grid-cols-1 lg:grid-cols-4 gap-4"><div className="card p-4 lg:col-span-1"><h2 className="font-bold mb-3">מקרא</h2>{Object.entries(statusLabels).map(([k, v]) => <div key={k} className="flex items-center gap-2 text-sm mb-2"><span className="w-3 h-3 rounded-full" style={{ background: statusColors[k] }} />{v}</div>)}<p className="text-xs mt-4" style={{ color: "var(--muted)" }}>הצבעים מייצגים את סטטוס הלקוח. קריאות פעילות יוצגו בכרטיס המידע.</p></div><div className="card overflow-hidden lg:col-span-3" style={{ minHeight: 560 }}><div ref={mapRef} style={{ width: "100%", height: 560, background: "#e8eef3" }}>{!ready && !error && <div className="p-8 text-center">טוען את Google Maps...</div>}</div></div></div>{selected && <div className="card p-5"><div className="flex justify-between"><div><h2 className="text-xl font-bold">{selected.name}</h2><p style={{ color: "var(--muted)" }}>{selected.company || ""} · {selected.city || ""} · {selected.phone}</p></div><button onClick={() => setSelected(null)} className="btn-primary">סגור</button></div><div className="flex gap-2 mt-4"><Link href={`/customers/${selected.id}`} className="btn-primary">פתח כרטיס לקוח</Link><a href={`https://www.google.com/maps/dir/?api=1&destination=${selected.lat},${selected.lng}`} target="_blank" rel="noreferrer" className="btn-primary">Google Maps</a><a href={`https://waze.com/ul?ll=${selected.lat}%2C${selected.lng}&navigate=yes`} target="_blank" rel="noreferrer" className="btn-accent">Waze</a></div>{selected.serviceCalls?.length > 0 && <div className="mt-4 text-sm"><strong>קריאות פעילות:</strong> {selected.serviceCalls.map((s: any) => `${s.callNumber} (${s.type})`).join(" · ")}</div>}</div>}</div>;
+declare global {
+  interface Window {
+    google?: any;
+    __googleMapsLoading?: Promise<void>;
+  }
 }
 
+type MapCustomer = {
+  id: string;
+  name: string;
+  company?: string | null;
+  city?: string | null;
+  phone?: string | null;
+  status: string;
+  lat: number;
+  lng: number;
+  activeServiceCalls?: number;
+};
 
+const STATUS_OPTIONS: { value: string; label: string; color: string }[] = [
+  { value: "", label: "הכל", color: "#172B4D" },
+  { value: "ACTIVE", label: "פעיל", color: "#2E7D32" },
+  { value: "PROSPECT", label: "פרוספקט", color: "#1E5AA8" },
+  { value: "LEAD", label: "ליד", color: "#C45A2A" },
+  { value: "CHURNED", label: "עזב", color: "#8A8275" },
+];
 
+function statusColor(status: string): string {
+  return STATUS_OPTIONS.find((o) => o.value === status)?.color || "#8A8275";
+}
 
+function statusLabel(status: string): string {
+  return STATUS_OPTIONS.find((o) => o.value === status)?.label || status;
+}
 
+function loadGoogleMaps(apiKey: string): Promise<void> {
+  if (window.google?.maps) return Promise.resolve();
+  if (window.__googleMapsLoading) return window.__googleMapsLoading;
+  window.__googleMapsLoading = new Promise<void>((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&language=he&region=IL`;
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Failed to load Google Maps script"));
+    document.head.appendChild(script);
+  });
+  return window.__googleMapsLoading;
+}
 
+export default function ServiceMapPage() {
+  const [customers, setCustomers] = useState<MapCustomer[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [counts, setCounts] = useState<Record<string, number>>({});
+
+  const mapRef = useRef<any>(null);
+  const markersRef = useRef<any[]>([]);
+  const infoWindowRef = useRef<any>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "";
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/service-map", { cache: "no-store" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (cancelled) return;
+        // תמיכה בשני פורמטים: { customers, counts } או מערך ישיר
+        const list: MapCustomer[] = Array.isArray(data)
+          ? data
+          : data.customers || [];
+        setCustomers(list);
+        if (Array.isArray(data)) {
+          const c: Record<string, number> = { all: list.length };
+          list.forEach((x) => {
+            c[x.status] = (c[x.status] || 0) + 1;
+          });
+          setCounts(c);
+        } else {
+          setCounts({ all: list.length, ...(data.counts || {}) });
+        }
+      } catch (e: any) {
+        if (!cancelled) setError(e?.message || "שגיאה בטעינת הנתונים");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return customers.filter((c) => {
+      const matchStatus = !statusFilter || c.status === statusFilter;
+      const matchQuery =
+        !q ||
+        `${c.name} ${c.company || ""} ${c.city || ""} ${c.phone || ""}`
+          .toLowerCase()
+          .includes(q);
+      return matchStatus && matchQuery;
+    });
+  }, [customers, query, statusFilter]);
+
+  const renderMarkers = useCallback(() => {
+    const map = mapRef.current;
+    if (!map || !window.google) return;
+
+    markersRef.current.forEach((m) => m.setMap(null));
+    markersRef.current = [];
+
+    if (!infoWindowRef.current) {
+      infoWindowRef.current = new window.google.maps.InfoWindow();
+    }
+
+    const bounds = new window.google.maps.LatLngBounds();
+
+    visible.forEach((c) => {
+      const marker = new window.google.maps.Marker({
+        position: { lat: c.lat, lng: c.lng },
+        map,
+        title: c.name,
+        icon: {
+          path: window.google.maps.SymbolPath.CIRCLE,
+          scale: 8,
+          fillColor: statusColor(c.status),
+          fillOpacity: 0.95,
+          strokeColor: "#ffffff",
+          strokeWeight: 1.5,
+        },
+      });
+
+      marker.addListener("click", () => {
+        const info = infoWindowRef.current;
+        if (!info) return;
+        const mapsLink = `https://www.google.com/maps/search/?api=1&query=${c.lat},${c.lng}`;
+        const wazeLink = `https://waze.com/ul?ll=${c.lat},${c.lng}&navigate=yes`;
+        info.setContent(
+          `<div dir="rtl" style="font-family:inherit;min-width:200px">` +
+            `<div style="font-weight:700;font-size:14px">${c.name}</div>` +
+            (c.company ? `<div>${c.company}</div>` : "") +
+            `<div style="margin-top:4px;color:${statusColor(c.status)};font-weight:600">${statusLabel(c.status)}</div>` +
+            (c.city ? `<div>${c.city}</div>` : "") +
+            (c.phone ? `<div dir="ltr">${c.phone}</div>` : "") +
+            (c.activeServiceCalls ? `<div>קריאות פעילות: ${c.activeServiceCalls}</div>` : "") +
+            `<div style="margin-top:6px"><a href="${mapsLink}" target="_blank">Google Maps</a> · ` +
+            `<a href="${wazeLink}" target="_blank">Waze</a></div>` +
+            `</div>`
+        );
+        info.open(map, marker);
+      });
+
+      markersRef.current.push(marker);
+      bounds.extend({ lat: c.lat, lng: c.lng });
+    });
+
+    if (visible.length > 1) {
+      map.fitBounds(bounds, 60);
+    } else if (visible.length === 1) {
+      map.setCenter({ lat: visible[0].lat, lng: visible[0].lng });
+      map.setZoom(14);
+    }
+  }, [visible]);
+
+  useEffect(() => {
+    if (loading || error) return;
+    if (!apiKey) {
+      setError("חסר מפתח Google Maps. הגדר NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ובצע Redeploy.");
+      return;
+    }
+    loadGoogleMaps(apiKey)
+      .then(() => {
+        if (!containerRef.current || mapRef.current) return;
+        mapRef.current = new window.google.maps.Map(containerRef.current, {
+          center: { lat: 32.0853, lng: 34.7818 },
+          zoom: 8,
+          language: "he",
+          disableDefaultUI: false,
+        });
+        renderMarkers();
+      })
+      .catch(() => {
+        setError("נכשלה טעינת מפות Google. בדוק את המפתח, הפעלת Maps JavaScript API והגבלת הדומיין.");
+      });
+  }, [loading, error, apiKey, renderMarkers]);
+
+  useEffect(() => {
+    renderMarkers();
+  }, [visible, renderMarkers]);
+
+  if (loading) {
+    return (
+      <div className="p-6" dir="rtl">
+        <p style={{ color: "var(--muted, #8A8275)" }}>טוען מפת שירות…</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="p-6" dir="rtl">
+        <div
+          className="rounded-lg p-4"
+          style={{ background: "#FDECEC", border: "1px solid #F5C6C6" }}
+        >
+          <p style={{ color: "#8A2B2B", fontWeight: 600 }}>{error}</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-4 space-y-4" dir="rtl">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <h1 className="text-xl font-bold" style={{ color: "var(--ink, #172B4D)" }}>
+          מפת שירות
+        </h1>
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="חיפוש לקוח, עיר או טלפון…"
+          className="rounded-md px-3 py-2 text-sm w-64"
+          style={{
+            border: "1px solid var(--border, #E0D9C8)",
+            background: "#fff",
+            color: "var(--ink, #172B4D)",
+          }}
+        />
+      </div>
+
+      {/* כפתורי סינון לפי סטטוס */}
+      <div className="flex gap-2 flex-wrap items-center">
+        {STATUS_OPTIONS.map(({ value, label, color }) => {
+          const selected = statusFilter === value;
+          return (
+            <button
+              key={value || "all"}
+              onClick={() => setStatusFilter(value)}
+              className="px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
+              style={{
+                background: selected ? color : "transparent",
+                color: selected ? "#fff" : "var(--muted, #8A8275)",
+                border: `1px solid ${selected ? color : "var(--border, #E0D9C8)"}`,
+              }}
+            >
+              {label}
+              <span
+                className="mr-1.5 text-xs"
+                style={{ opacity: 0.85 }}
+                dir="ltr"
+              >
+                {value ? counts[value] ?? 0 : counts.all ?? customers.length}
+              </span>
+            </button>
+          );
+        })}
+        <span className="text-xs" style={{ color: "var(--muted, #8A8275)" }}>
+          מוצגים {visible.length} לקוחות מתוך {customers.length}
+        </span>
+      </div>
+
+      <div
+        ref={containerRef}
+        className="w-full rounded-lg overflow-hidden"
+        style={{ height: "70vh", minHeight: 420, border: "1px solid var(--border, #E0D9C8)" }}
+      />
+
+      <div className="flex gap-4 flex-wrap text-xs" style={{ color: "var(--muted, #8A8275)" }}>
+        {STATUS_OPTIONS.filter((o) => o.value).map(({ value, label, color }) => (
+          <span key={value} className="flex items-center gap-1.5">
+            <span
+              className="inline-block w-3 h-3 rounded-full"
+              style={{ background: color }}
+            />
+            {label}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 
