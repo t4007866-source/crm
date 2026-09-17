@@ -149,6 +149,14 @@ enum ServiceTaskStatus {
   CANCELLED
 }
 
+enum QuoteStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  DECLINED
+  EXPIRED
+}
+
 enum OrderStatus {
   DRAFT
   CONFIRMED
@@ -301,6 +309,7 @@ model User {
   grantedTemporaryPermissions TemporaryPermission[] @relation("TemporaryPermissionGrantedBy")
   createdCustomRoles CustomRole[] @relation("CustomRoleCreatedBy")
   grantedRoleAssignments UserRoleAssignment[] @relation("UserRoleAssignmentGrantedBy")
+  createdQuotes     Quote[]     @relation("QuoteCreator")
 
   @@index([role])
   @@index([isActive])
@@ -440,6 +449,7 @@ model Customer {
   orders       Order[]
   routeStops   RouteStop[] @relation("RouteStopCustomer")
   serviceInsuranceRenewals ServiceInsuranceRenewal[]
+  quotes        Quote[]
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
 
@@ -447,12 +457,47 @@ model Customer {
   @@index([city])
   @@index([assignedToId])
   @@index([createdAt])
-model Quote {  id               String    @id @default(cuid())  number           String    @unique  customerId       String  title            String  status           String    @default("DRAFT") // DRAFT, SENT, ACCEPTED, DECLINED, EXPIRED  subtotal         Float     @default(0)  tax              Float     @default(0)  total            Float     @default(0)  currency         String    @default("ILS")  validUntil       DateTime?  notes            String?  convertedOrderId String?   @unique  createdAt        DateTime  @default(now())  updatedAt        DateTime  @updatedAt  createdBy        String?
-  customer Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)  items    QuoteItem[]
-  @@index([customerId])  @@index([status])}
-model QuoteItem {  id          String  @id @default(cuid())  quoteId     String  description String  quantity    Float   @default(1)  unitPrice   Float   @default(0)  total       Float   @default(0)
+}
+
+// ═══════════════ הצעות מחיר (Quotes) ═══════════════
+
+model Quote {
+  id               String    @id @default(cuid())
+  number           String    @unique
+  customerId       String
+  title            String
+  status           QuoteStatus @default(DRAFT)
+  subtotal         Float     @default(0)
+  tax              Float     @default(0)
+  total            Float     @default(0)
+  currency         String    @default("ILS")
+  validUntil       DateTime?
+  notes            String?
+  convertedOrderId String?   @unique
+  createdById      String?
+  createdBy        User?     @relation("QuoteCreator", fields: [createdById], references: [id])
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  customer Customer   @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  items    QuoteItem[]
+
+  @@index([customerId])
+  @@index([status])
+}
+
+model QuoteItem {
+  id          String @id @default(cuid())
+  quoteId     String
+  description String
+  quantity    Float  @default(1)
+  unitPrice   Float  @default(0)
+  total       Float  @default(0)
+
   quote Quote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
-  @@index([quoteId])}}
+
+  @@index([quoteId])
+}
 
 model CustomerContact {
   id         String   @id @default(cuid())
@@ -499,8 +544,12 @@ model Lead {
   interests         Json       @default("[]")
   orders            Order[]     @relation("LeadOrders")
   currentSystem     String?
+  quoteAmount               Float?
   quoteIncludesVat  Boolean    @default(true)
   quoteIncludesInstallation Boolean @default(false)
+  quoteSentAt               DateTime?
+  quoteStatus               String?
+  quoteId                   String?
   ordered           Boolean    @default(false)
   followUps         LeadFollowUp[]
   activities        LeadActivity[]
@@ -1636,6 +1685,11 @@ model TechnicianInventory {
   @@unique([technicianId, productId])
   @@index([productId])
 }
+
+
+
+
+
 
 
 
