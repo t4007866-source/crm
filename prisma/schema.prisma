@@ -496,7 +496,7 @@ model QuoteItem {
   quantity    Float  @default(1)
   unitPrice   Float  @default(0)
   total       Float  @default(0)
-
+sortOrder Int @default(0)
   quote Quote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
 
   @@index([quoteId])
@@ -517,7 +517,6 @@ model CustomerContact {
 
   @@index([customerId])
 }
-
 // ═══════════════ CORE CRM — LEAD ═══════════════
 
 model Lead {
