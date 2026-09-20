@@ -824,6 +824,13 @@ model ServiceTask {
   @@index([nextServiceDueDate])
 }
 
+model Setting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
 model Order {
   id                  String               @id @default(cuid())
   orderNumber         String               @unique
@@ -833,6 +840,9 @@ model Order {
   lead                Lead?                @relation("LeadOrders", fields: [leadId], references: [id], onDelete: SetNull)
   title               String
   status              OrderStatus          @default(DRAFT)
+  subtotal            Float                @default(0)
+  vatRate             Float                @default(18)
+  vatAmount           Float                @default(0)
   total               Float                @default(0)
   discount            Float                @default(0)
   paymentStatus       String               @default("PENDING")
@@ -1653,4 +1663,6 @@ model TechnicianInventory {
   @@unique([technicianId, productId])
   @@index([productId])
 }
+
+
 
