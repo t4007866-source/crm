@@ -7,23 +7,30 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const { id } = await params;
-  const quotation = await prisma.quote.findUnique({
-    where: { id },
-    include: {
-      customer: true,
-      lead: true,
-      createdBy: { select: { id: true, name: true } },
-      items: { orderBy: { sortOrder: "asc" } },
-      itemHistory: { orderBy: { createdAt: "desc" } },
-      snapshots: { orderBy: { version: "desc" } },
-      versions: { select: { id: true, number: true, version: true, status: true, total: true } },
-    },
-  });
-  if (!quotation) {
-    return NextResponse.json({ error: "הצעה לא נמצאה" }, { status: 404 });
+  try {
+    const { id } = await params;
+    const quotation = await prisma.quote.findUnique({
+      where: { id },
+      include: {
+        customer: true,
+        lead: true,
+        createdBy: { select: { id: true, name: true } },
+       items: { orderBy: { id: "asc" } },
+        itemHistory: { orderBy: { createdAt: "desc" } },
+        snapshots: { orderBy: { version: "desc" } },
+        versions: { select: { id: true, number: true, version: true, status: true, total: true } },
+      },
+    });
+    if (!quotation) {
+      return NextResponse.json({ error: "הצעה לא נמצאה" }, { status: 404 });
+    }
+    return NextResponse.json({ quotation });
+  } catch (err: any) {
+    return NextResponse.json(
+      { error: err?.message || "שגיאה בטעינת הצעה" },
+      { status: 500 }
+    );
   }
-  return NextResponse.json({ quotation });
 }
 
 // PUT /api/quotations/[id] — עדכון פריטים / החלפת דגם / הנחה / סטטוס
@@ -52,16 +59,20 @@ export async function PUT(
 
       // אישור הצעה על ליד — סימון quoteStatus על הליד
       if (body.status === "ACCEPTED" && existing.leadId) {
-        await prisma.lead.update({
-          where: { id: existing.leadId },
-          data: { quoteStatus: "ACCEPTED", quoteSentAt: existing.sentAt },
-        }).catch(() => {});
+        await prisma.lead
+          .update({
+            where: { id: existing.leadId },
+            data: {
+              quoteStatus: "ACCEPTED" as any,
+              quoteSentAt: existing.sentAt,
+            },
+          })
+          .catch(() => {});
       }
       return NextResponse.json({ quotation: updated });
     }
 
     // עדכון פריטים — כולל החלפת דגם
-    // items: [{ id (קיים/חדש), productId, itemType, name, model, description, quantity, unitPrice, isOptional, recommended }]
     if (Array.isArray(body.items)) {
       const changes: any[] = [];
 
@@ -73,7 +84,8 @@ export async function PUT(
         const modelChanged =
           incoming.productId && incoming.productId !== old.productId;
         const priceChanged =
-          incoming.unitPrice != null && Number(incoming.unitPrice) !== old.unitPrice;
+          incoming.unitPrice != null &&
+          Number(incoming.unitPrice) !== old.unitPrice;
 
         if (modelChanged || priceChanged) {
           changes.push({
@@ -93,7 +105,9 @@ export async function PUT(
       }
 
       // מחיקת פריטים שהוסרו
-      const keepIds = new Set(body.items.filter((i: any) => i.id).map((i: any) => i.id));
+      const keepIds = new Set(
+        body.items.filter((i: any) => i.id).map((i: any) => i.id)
+      );
       const removed = existing.items.filter((i) => !keepIds.has(i.id));
       if (removed.length > 0) {
         await prisma.quoteItem.deleteMany({
@@ -157,7 +171,9 @@ export async function PUT(
       }
 
       // חישוב מחדש
-      const allItems = await prisma.quoteItem.findMany({ where: { quoteId: id } });
+      const allItems = await prisma.quoteItem.findMany({
+        where: { quoteId: id },
+      });
       const subtotal = allItems
         .filter((i) => !i.isOptional)
         .reduce((s, i) => s + i.total, 0);
@@ -217,13 +233,27 @@ export async function POST(
     }
 
     // שמירת צילום מצב של הגרסה הנוכחית
+    // חשוב: Prisma לא מקבל אובייקטים עם Date בתוך שדה Json — ממיר ל-JSON טהור
+    const safeSnapshot = JSON.parse(
+      JSON.stringify({
+        ...source,
+        items: undefined,
+        customer: undefined,
+        lead: undefined,
+        createdBy: undefined,
+        snapshots: undefined,
+        versions: undefined,
+        itemHistory: undefined,
+      })
+    );
+
     await prisma.quoteVersion.create({
       data: {
         quoteId: source.id,
         version: source.version,
-        snapshot: source as any,
+        snapshot: safeSnapshot,
         note: body.note || `צילום v${source.version} לפני יצירת גרסה חדשה`,
-        createdById: body.createdById || null,
+        createdById: body.createdById || source.createdById || null,
       },
     });
 
@@ -239,7 +269,7 @@ export async function POST(
         customerId: source.customerId,
         leadId: source.leadId,
         title: source.title,
-        status: "DRAFT",
+        status: "DRAFT" as any,
         version: newVersion,
         parentQuoteId: source.id,
         subtotal: source.subtotal,
