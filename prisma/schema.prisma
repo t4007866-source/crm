@@ -152,7 +152,6 @@ enum ServiceTaskStatus {
 enum QuoteStatus {
   DRAFT
   SENT
-  VIEWED
   ACCEPTED
   DECLINED
   EXPIRED
@@ -296,8 +295,6 @@ model User {
   assignedTasks                Task[]                    @relation("TaskAssignee")
   assignedServiceTasks         ServiceTask[]             @relation("ServiceTaskTechnician")
   dashboardKpis                DashboardKpi[]
-  quoteItemHistoryCreated      QuoteItemHistory[]        @relation("QuoteItemHistoryCreator")
-  quoteVersionsCreated         QuoteVersion[]            @relation("QuoteVersionCreator")
   routePlans                   RoutePlan[]               @relation("RouteTechnician")
   serviceInsuranceRenewals     ServiceInsuranceRenewal[] @relation("InsuranceRenewalUser")
   assignedOrders               Order[]                   @relation("OrderAssignee")
@@ -313,6 +310,8 @@ model User {
   createdCustomRoles           CustomRole[]              @relation("CustomRoleCreatedBy")
   grantedRoleAssignments       UserRoleAssignment[]      @relation("UserRoleAssignmentGrantedBy")
   createdQuotes                Quote[]                   @relation("QuoteCreator")
+  quoteItemHistoryChanges      QuoteItemHistory[]        @relation("QuoteItemHistoryUser")
+  quoteVersionsCreated         QuoteVersion[]            @relation("QuoteVersionUser")
 
   @@index([role])
   @@index([isActive])
@@ -468,103 +467,99 @@ model Customer {
 // ═══════════════ הצעות מחיר (Quotes) ═══════════════
 
 model Quote {
-  id                  String      @id @default(cuid())
-  number              String      @unique
-  customerId          String
-  leadId              String?
-  title               String
-  status              QuoteStatus @default(DRAFT)
-  version             Int         @default(1)
-  parentQuoteId       String?
-  subtotal            Float       @default(0)
-  discountPercent     Float       @default(0)
-  vatPercent          Float       @default(17)
-  tax                 Float       @default(0)
-  totalBeforeDiscount Float       @default(0)
-  total               Float       @default(0)
-  currency            String      @default("ILS")
-  validUntil          DateTime?
-  sentAt              DateTime?
-  viewedAt            DateTime?
-  notes               String?
-  convertedOrderId    String?     @unique
-  createdById         String?
-  createdBy           User?       @relation("QuoteCreator", fields: [createdById], references: [id])
-  createdAt           DateTime    @default(now())
-  updatedAt           DateTime    @updatedAt
+  id               String      @id @default(cuid())
+  number           String      @unique
+  customerId       String
+  title            String
+  status           QuoteStatus @default(DRAFT)
+  subtotal         Float       @default(0)
+  tax              Float       @default(0)
+  total            Float       @default(0)
+  currency         String      @default("ILS")
+  validUntil       DateTime?
+  notes            String?
+  convertedOrderId String?     @unique
+  createdById      String?
+  createdBy        User?       @relation("QuoteCreator", fields: [createdById], references: [id])
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
 
-  customer    Customer           @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  lead        Lead?              @relation(fields: [leadId], references: [id], onDelete: SetNull)
-  parentQuote Quote?             @relation("QuoteVersions", fields: [parentQuoteId], references: [id], onDelete: SetNull)
-  childQuotes Quote[]            @relation("QuoteVersions")
-  items       QuoteItem[]
-  itemHistory QuoteItemHistory[]
-  snapshots   QuoteVersion[]
+  customer     Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  items        QuoteItem[]
+  itemHistory  QuoteItemHistory[]
+  snapshots    QuoteSnapshot[]
+  versions     QuoteVersion[]
 
   @@index([customerId])
   @@index([status])
-  @@index([leadId])
-  @@index([parentQuoteId])
 }
 
 model QuoteItem {
-  id          String  @id @default(cuid())
+  id          String @id @default(cuid())
   quoteId     String
-  productId   String?
-  itemType    String  @default("PRODUCT")
-  name        String?
-  model       String?
-  description String  @default("")
-  quantity    Float   @default(1)
-  unitPrice   Float   @default(0)
-  total       Float   @default(0)
-  isOptional  Boolean @default(false)
-  recommended Boolean @default(false)
-  sortOrder   Int     @default(0)
+  description String
+  quantity    Float  @default(1)
+  unitPrice   Float  @default(0)
+  total       Float  @default(0)
 
-  quote   Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
-  product Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  quote     Quote             @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  history   QuoteItemHistory[]
 
   @@index([quoteId])
-  @@index([productId])
 }
 
+// ═══════════════ היסטוריית פריטים, גרסאות ותמונות מצב של הצעות מחיר ═══════════════
+
 model QuoteItemHistory {
-  id           String   @id @default(cuid())
-  quoteId      String
-  itemId       String?
-  changeType   String
-  oldProductId String?
-  newProductId String?
-  oldModel     String?
-  newModel     String?
-  oldPrice     Float?
-  newPrice     Float?
-  note         String?
-  createdById  String?
-  createdAt    DateTime @default(now())
+  id          String   @id @default(cuid())
+  quoteId     String
+  itemId      String?
+  action      String   // CREATED | UPDATED | REMOVED
+  description String?
+  quantity    Float?
+  unitPrice   Float?
+  total       Float?
+  changedById String?
+  changedBy   User?    @relation("QuoteItemHistoryUser", fields: [changedById], references: [id])
+  createdAt   DateTime @default(now())
 
-  quote     Quote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
-  createdBy User? @relation("QuoteItemHistoryCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  quote  Quote      @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  item   QuoteItem? @relation(fields: [itemId], references: [id], onDelete: SetNull)
 
-  @@index([quoteId])
-  @@index([createdAt])
+  @@index([quoteId, createdAt])
+  @@index([itemId])
 }
 
 model QuoteVersion {
-  id          String   @id @default(cuid())
-  quoteId     String
-  version     Int
-  snapshot    Json
-  note        String?
+  id        String   @id @default(cuid())
+  quoteId   String
+  version   Int
+  status    QuoteStatus
+  subtotal  Float    @default(0)
+  tax       Float    @default(0)
+  total     Float    @default(0)
+  notes     String?
+  payload   Json     @default("{}")
   createdById String?
-  createdAt   DateTime @default(now())
+  createdBy User?    @relation("QuoteVersionUser", fields: [createdById], references: [id])
+  createdAt DateTime @default(now())
 
-  quote     Quote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
-  createdBy User? @relation("QuoteVersionCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  quote Quote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+
+  @@unique([quoteId, version])
+  @@index([quoteId])
+}
+
+model QuoteSnapshot {
+  id        String   @id @default(cuid())
+  quoteId   String
+  version   Int      @default(1)
+  payload   Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  quote Quote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
 
   @@index([quoteId])
-  @@index([quoteId, version])
 }
 
 model CustomerContact {
@@ -582,6 +577,7 @@ model CustomerContact {
 
   @@index([customerId])
 }
+
 // ═══════════════ CORE CRM — LEAD ═══════════════
 
 model Lead {
@@ -618,7 +614,6 @@ model Lead {
   quoteStatus               String?
   quoteId                   String?
   ordered                   Boolean              @default(false)
-  quotes                    Quote[]
   followUps                 LeadFollowUp[]
   activities                LeadActivity[]
   contactAttempts           LeadContactAttempt[]
@@ -889,13 +884,6 @@ model ServiceTask {
   @@index([nextServiceDueDate])
 }
 
-model Setting {
-  id        String   @id @default(cuid())
-  key       String   @unique
-  value     String
-  updatedAt DateTime @updatedAt
-}
-
 model Order {
   id                  String               @id @default(cuid())
   orderNumber         String               @unique
@@ -905,9 +893,6 @@ model Order {
   lead                Lead?                @relation("LeadOrders", fields: [leadId], references: [id], onDelete: SetNull)
   title               String
   status              OrderStatus          @default(DRAFT)
-  subtotal            Float                @default(0)
-  vatRate             Float                @default(18)
-  vatAmount           Float                @default(0)
   total               Float                @default(0)
   discount            Float                @default(0)
   paymentStatus       String               @default("PENDING")
@@ -1092,7 +1077,6 @@ model Product {
   movements           StockMovement[]
   purchaseItems       PurchaseOrderItem[]
   technicianInventory TechnicianInventory[]
-  quoteItems          QuoteItem[]
   createdAt           DateTime              @default(now())
   updatedAt           DateTime              @updatedAt
 
@@ -1729,10 +1713,6 @@ model TechnicianInventory {
   @@unique([technicianId, productId])
   @@index([productId])
 }
-
-
-
-
 
 
 

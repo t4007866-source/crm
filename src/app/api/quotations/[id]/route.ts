@@ -1,312 +1,220 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { can } from "@/lib/permissions";
 import { QuoteStatus } from "@prisma/client";
 
-// GET /api/quotations/[id] — הצעה מלאה כולל היסטוריה וגרסאות
+export const dynamic = "force-dynamic";
+
+const VAT_RATE = 0.17;
+
+function computeTotals(items: any[]) {
+  const subtotal = items.reduce(
+    (sum, i) => sum + Number(i.quantity || 1) * Number(i.unitPrice || 0),
+    0
+  );
+  const tax = subtotal * VAT_RATE;
+  return {
+    subtotal: Math.round(subtotal * 100) / 100,
+    tax: Math.round(tax * 100) / 100,
+    total: Math.round((subtotal + tax) * 100) / 100,
+  };
+}
+
+const fullInclude = {
+  customer: true,
+  createdBy: { select: { id: true, name: true } },
+  items: { orderBy: { id: "asc" as const } },
+  itemHistory: {
+    orderBy: { createdAt: "desc" as const },
+    include: { changedBy: { select: { id: true, name: true } } },
+  },
+  snapshots: { orderBy: { version: "desc" as const } },
+  versions: {
+    select: { id: true, version: true, status: true, total: true, createdAt: true },
+    orderBy: { version: "desc" as const },
+  },
+};
+
+// GET /api/quotations/[id]
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  try {
-    const { id } = await params;
-    const quotation = await prisma.quote.findUnique({
-      where: { id },
-      include: {
-        customer: true,
-        createdBy: { select: { id: true, name: true } },
-        items: { orderBy: { id: "asc" } },
-        itemHistory: { orderBy: { createdAt: "desc" } },
-        snapshots: { orderBy: { version: "desc" } },
-        versions: { select: { id: true, number: true, version: true, status: true, total: true } },
-      },
-    });
-    if (!quotation) {
-      return NextResponse.json({ error: "הצעה לא נמצאה" }, { status: 404 });
-    }
-    return NextResponse.json({ quotation });
-  } catch (err: any) {
-    return NextResponse.json(
-      { error: err?.message || "שגיאה בטעינת הצעה" },
-      { status: 500 }
-    );
-  }
+  const session = await getServerSession(authOptions);
+  if (!session) return NextResponse.json({ error: "לא מחובר" }, { status: 401 });
+  if (!can((session.user as any).role, "quotes", "view"))
+    return NextResponse.json({ error: "אין הרשאה" }, { status: 403 });
+
+  const { id } = await params;
+  const quote = await prisma.quote.findUnique({ where: { id }, include: fullInclude });
+  if (!quote) return NextResponse.json({ error: "הצעת מחיר לא נמצאה" }, { status: 404 });
+
+  return NextResponse.json({ quote });
 }
 
-// PUT /api/quotations/[id] — עדכון פריטים / החלפת דגם / הנחה / סטטוס
-export async function PUT(
+// PATCH /api/quotations/[id] — עדכון פריטים עם היסטוריה, גרסה חדשה ותמונת מצב
+export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  try {
-    const { id } = await params;
-    const body = await req.json();
-    const existing = await prisma.quote.findUnique({
-      where: { id },
-      include: { items: true },
-    });
-    if (!existing) {
-      return NextResponse.json({ error: "הצעה לא נמצאה" }, { status: 404 });
-    }
+  const session = await getServerSession(authOptions);
+  if (!session) return NextResponse.json({ error: "לא מחובר" }, { status: 401 });
+  if (!can((session.user as any).role, "quotes", "edit"))
+    return NextResponse.json({ error: "אין הרשאה" }, { status: 403 });
 
-    // שינוי סטטוס בלבד (SENT / VIEWED / ACCEPTED / DECLINED / EXPIRED)
-    if (body.status && Object.values(QuoteStatus).includes(body.status)) {
-      const data: any = { status: body.status };
-      if (body.status === "SENT") data.sentAt = new Date();
-      if (body.status === "VIEWED") data.viewedAt = new Date();
+  const { id } = await params;
+  const body = await req.json();
+  const userId = (session.user as any).id as string | undefined;
 
-      const updated = await prisma.quote.update({ where: { id }, data });
+  const existing = await prisma.quote.findUnique({
+    where: { id },
+    include: { items: true, versions: true },
+  });
+  if (!existing) return NextResponse.json({ error: "הצעת מחיר לא נמצאה" }, { status: 404 });
 
-      // אישור הצעה על ליד — סימון quoteStatus על הליד
-      if (body.status === "ACCEPTED" && existing.leadId) {
-        await prisma.lead
-          .update({
-            where: { id: existing.leadId },
-            data: {
-              quoteStatus: "ACCEPTED" as any,
-              quoteSentAt: existing.sentAt,
-            },
-          })
-          .catch(() => {});
-      }
-      return NextResponse.json({ quotation: updated });
-    }
+  if (
+    body.status &&
+    !Object.values(QuoteStatus).includes(body.status)
+  )
+    return NextResponse.json({ error: "סטטוס לא תקין" }, { status: 400 });
 
-    // עדכון פריטים — כולל החלפת דגם
-    if (Array.isArray(body.items)) {
-      const changes: any[] = [];
+  const data: any = {};
+  if (body.title !== undefined) data.title = body.title;
+  if (body.notes !== undefined) data.notes = body.notes;
+  if (body.validUntil !== undefined)
+    data.validUntil = body.validUntil ? new Date(body.validUntil) : null;
+  if (body.currency !== undefined) data.currency = body.currency;
 
-      // היסטוריית החלפות דגם
-      for (const incoming of body.items) {
-        if (!incoming.id) continue;
-        const old = existing.items.find((i) => i.id === incoming.id);
-        if (!old) continue;
-        const modelChanged =
-          incoming.productId && incoming.productId !== old.productId;
-        const priceChanged =
-          incoming.unitPrice != null &&
-          Number(incoming.unitPrice) !== old.unitPrice;
+  // עדכון פריטים — מחיקה ויצירה מחדש + תיעוד היסטוריה
+  let totals = {
+    subtotal: existing.subtotal,
+    tax: existing.tax,
+    total: existing.total,
+  };
 
-        if (modelChanged || priceChanged) {
-          changes.push({
-            quoteId: id,
-            itemId: old.id,
-            changeType: modelChanged ? "MODEL_SWAPPED" : "PRICE_CHANGED",
-            oldProductId: old.productId,
-            newProductId: incoming.productId || null,
-            oldModel: old.model,
-            newModel: incoming.model || null,
-            oldPrice: old.unitPrice,
-            newPrice: Number(incoming.unitPrice ?? old.unitPrice),
-            note: body.changeNote || null,
-            createdById: body.createdById || null,
-          });
-        }
-      }
+  if (Array.isArray(body.items)) {
+    const items = body.items.filter((i: any) => i && i.description);
+    if (items.length === 0)
+      return NextResponse.json({ error: "חובה לפחות פריט אחד" }, { status: 400 });
 
-      // מחיקת פריטים שהוסרו
-      const keepIds = new Set(
-        body.items.filter((i: any) => i.id).map((i: any) => i.id)
-      );
-      const removed = existing.items.filter((i) => !keepIds.has(i.id));
-      if (removed.length > 0) {
-        await prisma.quoteItem.deleteMany({
-          where: { id: { in: removed.map((i) => i.id) } },
-        });
-        for (const r of removed) {
-          changes.push({
-            quoteId: id,
-            itemId: r.id,
-            changeType: "REMOVED",
-            oldProductId: r.productId,
-            oldModel: r.model,
-            oldPrice: r.unitPrice,
-            createdById: body.createdById || null,
-          });
-        }
-      }
+    totals = computeTotals(items);
 
-      // עדכון / הוספה
-      let sortIdx = 0;
-      for (const incoming of body.items) {
-        const qty = Number(incoming.quantity || 1);
-        const price = Number(incoming.unitPrice || 0);
-        const itemData = {
-          productId: incoming.productId || null,
-          itemType: incoming.itemType || "PRODUCT",
-          name: incoming.name || null,
-          model: incoming.model || null,
-          description: incoming.description || "",
+    const oldByDesc = new Map(existing.items.map((i) => [i.description, i]));
+    const newDescs = new Set(items.map((i: any) => String(i.description)));
+
+    const historyRows: any[] = [];
+    for (const i of items) {
+      const desc = String(i.description);
+      const prev = oldByDesc.get(desc);
+      const qty = Number(i.quantity || 1);
+      const price = Number(i.unitPrice || 0);
+      if (!prev) {
+        historyRows.push({
+          action: "CREATED",
+          description: desc,
           quantity: qty,
           unitPrice: price,
-          total: qty * price,
-          isOptional: Boolean(incoming.isOptional),
-          recommended: Boolean(incoming.recommended),
-          sortOrder: incoming.sortOrder ?? sortIdx,
-        };
-        if (incoming.id && existing.items.some((i) => i.id === incoming.id)) {
-          await prisma.quoteItem.update({
-            where: { id: incoming.id },
-            data: itemData,
-          });
-        } else {
-          await prisma.quoteItem.create({
-            data: { ...itemData, quoteId: id },
-          });
-          changes.push({
-            quoteId: id,
-            itemId: incoming.id || "new",
-            changeType: "ADDED",
-            newProductId: itemData.productId,
-            newModel: itemData.model,
-            newPrice: price,
-            createdById: body.createdById || null,
-          });
-        }
-        sortIdx++;
+          total: Math.round(qty * price * 100) / 100,
+          changedById: userId || null,
+        });
+      } else if (
+        Number(prev.quantity) !== qty ||
+        Number(prev.unitPrice) !== price
+      ) {
+        historyRows.push({
+          action: "UPDATED",
+          description: desc,
+          quantity: qty,
+          unitPrice: price,
+          total: Math.round(qty * price * 100) / 100,
+          changedById: userId || null,
+        });
       }
-
-      if (changes.length > 0) {
-        await prisma.quoteItemHistory.createMany({ data: changes });
+    }
+    for (const prev of existing.items) {
+      if (!newDescs.has(prev.description)) {
+        historyRows.push({
+          action: "REMOVED",
+          description: prev.description,
+          quantity: prev.quantity,
+          unitPrice: prev.unitPrice,
+          total: prev.total,
+          changedById: userId || null,
+        });
       }
-
-      // חישוב מחדש
-      const allItems = await prisma.quoteItem.findMany({
-        where: { quoteId: id },
-      });
-      const subtotal = allItems
-        .filter((i) => !i.isOptional)
-        .reduce((s, i) => s + i.total, 0);
-      const discountPercent =
-        body.discountPercent != null
-          ? Number(body.discountPercent)
-          : existing.discountPercent;
-      const vatPercent =
-        body.vatPercent != null ? Number(body.vatPercent) : existing.vatPercent;
-      const afterDiscount = subtotal * (1 - discountPercent / 100);
-      const tax = afterDiscount * (vatPercent / 100);
-      const total = afterDiscount + tax;
-
-      const updated = await prisma.quote.update({
-        where: { id },
-        data: {
-          subtotal,
-          discountPercent,
-          vatPercent,
-          totalBeforeDiscount: subtotal,
-          tax,
-          total,
-          notes: body.notes != null ? body.notes : existing.notes,
-        },
-        include: { items: { orderBy: { sortOrder: "asc" } } },
-      });
-
-      return NextResponse.json({ quotation: updated });
     }
 
-    return NextResponse.json(
-      { error: "אין נתונים לעדכון" },
-      { status: 400 }
-    );
-  } catch (err: any) {
-    return NextResponse.json(
-      { error: err?.message || "שגיאה בעדכון הצעה" },
-      { status: 500 }
-    );
+    data.items = {
+      deleteMany: {},
+      create: items.map((i: any) => ({
+        description: String(i.description),
+        quantity: Number(i.quantity || 1),
+        unitPrice: Number(i.unitPrice || 0),
+        total: Math.round(Number(i.quantity || 1) * Number(i.unitPrice || 0) * 100) / 100,
+      })),
+    };
+    if (historyRows.length > 0) data.itemHistory = { create: historyRows };
+
+    // גרסה חדשה
+    const nextVersion =
+      existing.versions.reduce((m, v) => Math.max(m, v.version), 0) + 1;
+    data.versions = {
+      create: {
+        version: nextVersion,
+        status: (body.status as QuoteStatus) || existing.status,
+        subtotal: totals.subtotal,
+        tax: totals.tax,
+        total: body.taxIncluded ? totals.subtotal : totals.total,
+        notes: body.notes ?? existing.notes,
+        payload: { items, title: body.title ?? existing.title } as any,
+        createdById: userId || null,
+      },
+    };
+    data.snapshots = {
+      create: {
+        version: nextVersion,
+        payload: {
+          title: body.title ?? existing.title,
+          items,
+          totals,
+        } as any,
+      },
+    };
   }
+
+  if (body.status !== undefined) data.status = body.status;
+  if (body.items || body.taxIncluded !== undefined) {
+    data.subtotal = totals.subtotal;
+    data.tax = body.taxIncluded ? 0 : totals.tax;
+    data.total = body.taxIncluded ? totals.subtotal : totals.total;
+  }
+
+  const quote = await prisma.quote.update({
+    where: { id },
+    data,
+    include: fullInclude,
+  });
+
+  return NextResponse.json({ quote });
 }
 
-// POST /api/quotations/[id] — יצירת גרסה חדשה (v2) מבלי לדרוס את המקור
-export async function POST(
-  req: NextRequest,
+// DELETE /api/quotations/[id]
+export async function DELETE(
+  _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  try {
-    const { id } = await params;
-    const body = await req.json().catch(() => ({}));
-    const source = await prisma.quote.findUnique({
-      where: { id },
-      include: { items: { orderBy: { sortOrder: "asc" } } },
-    });
-    if (!source) {
-      return NextResponse.json({ error: "הצעה לא נמצאה" }, { status: 404 });
-    }
+  const session = await getServerSession(authOptions);
+  if (!session) return NextResponse.json({ error: "לא מחובר" }, { status: 401 });
+  if (!can((session.user as any).role, "quotes", "delete"))
+    return NextResponse.json({ error: "אין הרשאה" }, { status: 403 });
 
-    // שמירת צילום מצב של הגרסה הנוכחית
-    // חשוב: Prisma לא מקבל אובייקטים עם Date בתוך שדה Json — ממיר ל-JSON טהור
-    const safeSnapshot = JSON.parse(
-      JSON.stringify({
-        ...source,
-        items: undefined,
-        customer: undefined,
-        lead: undefined,
-        createdBy: undefined,
-        snapshots: undefined,
-        versions: undefined,
-        itemHistory: undefined,
-      })
-    );
+  const { id } = await params;
+  const existing = await prisma.quote.findUnique({ where: { id } });
+  if (!existing) return NextResponse.json({ error: "הצעת מחיר לא נמצאה" }, { status: 404 });
 
-    await prisma.quoteVersion.create({
-      data: {
-        quoteId: source.id,
-        version: source.version,
-        snapshot: safeSnapshot,
-        note: body.note || `צילום v${source.version} לפני יצירת גרסה חדשה`,
-        createdById: body.createdById || source.createdById || null,
-      },
-    });
-
-    // גרסה חדשה — העתקה מלאה
-    const newVersion = source.version + 1;
-    const year = new Date().getFullYear();
-    const count = await prisma.quote.count();
-    const number = `QT-${year}-${String(count + 1).padStart(4, "0")}-v${newVersion}`;
-
-    const copy = await prisma.quote.create({
-      data: {
-        number,
-        customerId: source.customerId,
-        leadId: source.leadId,
-        title: source.title,
-        status: "DRAFT" as any,
-        version: newVersion,
-        parentQuoteId: source.id,
-        subtotal: source.subtotal,
-        discountPercent: source.discountPercent,
-        tax: source.tax,
-        vatPercent: source.vatPercent,
-        totalBeforeDiscount: source.totalBeforeDiscount,
-        total: source.total,
-        currency: source.currency,
-        validUntil: source.validUntil,
-        notes: source.notes,
-        createdById: body.createdById || source.createdById,
-        items: {
-          create: source.items.map((i, idx) => ({
-            productId: i.productId,
-            itemType: i.itemType,
-            name: i.name,
-            model: i.model,
-            description: i.description,
-            quantity: i.quantity,
-            unitPrice: i.unitPrice,
-            total: i.total,
-            isOptional: i.isOptional,
-            recommended: i.recommended,
-            sortOrder: i.sortOrder ?? idx,
-          })),
-        },
-      },
-      include: { items: true },
-    });
-
-    return NextResponse.json({ quotation: copy }, { status: 201 });
-  } catch (err: any) {
-    return NextResponse.json(
-      { error: err?.message || "שגיאה ביצירת גרסה חדשה" },
-      { status: 500 }
-    );
-  }
+  await prisma.quote.delete({ where: { id } });
+  return NextResponse.json({ success: true });
 }
-
 
