@@ -182,7 +182,7 @@ export async function PUT(
           total,
           notes: body.notes != null ? body.notes : existing.notes,
         },
-        include: { items: { orderBy: { sortOrder: "asc" } } },
+        include: { items: { orderBy: { id: "asc" as const } }, },
       });
 
       return NextResponse.json({ quotation: updated });
