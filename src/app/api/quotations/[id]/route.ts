@@ -68,10 +68,7 @@ export async function PATCH(
   const body = await req.json();
   const userId = (session.user as any).id as string | undefined;
 
-  const existing = await prisma.quote.findUnique({
-    where: { id },
-    include: { items: true, versions: true },
-  });
+  const existing = await prisma.quote.findUnique({  where: { id },  include: { items: true },});
   if (!existing) return NextResponse.json({ error: "הצעת מחיר לא נמצאה" }, { status: 404 });
 
   if (
