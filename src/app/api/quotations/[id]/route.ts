@@ -14,7 +14,7 @@ export async function GET(
       customer: true,
       lead: true,
       createdBy: { select: { id: true, name: true } },
-      items: { orderBy: { createdAt: "asc" } },,
+      items: { orderBy: { createdAt: "asc" } },
       itemHistory: { orderBy: { createdAt: "desc" } },
       snapshots: { orderBy: { version: "desc" } },
       versions: { select: { id: true, number: true, version: true, status: true, total: true } },
