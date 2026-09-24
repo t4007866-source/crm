@@ -7,23 +7,32 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const { id } = await params;
-  const quotation = await prisma.quote.findUnique({
-    where: { id },
-    include: {
-      customer: true,
-      lead: true,
-      createdBy: { select: { id: true, name: true } },
-      items: { orderBy: { createdAt: "asc" } },
-      itemHistory: { orderBy: { createdAt: "desc" } },
-      snapshots: { orderBy: { version: "desc" } },
-      versions: { select: { id: true, number: true, version: true, status: true, total: true } },
-    },
-  });
-  if (!quotation) {
-    return NextResponse.json({ error: "הצעה לא נמצאה" }, { status: 404 });
+  try {
+    const { id } = await params;
+    const quotation = await prisma.quote.findUnique({
+      where: { id },
+      include: {
+        customer: true,
+        lead: true,
+        createdBy: { select: { id: true, name: true } },
+        items: { orderBy: { createdAt: "asc" } },
+        itemHistory: { orderBy: { createdAt: "desc" } },
+        snapshots: { orderBy: { version: "desc" } },
+        versions: {
+          select: { id: true, number: true, version: true, status: true, total: true },
+        },
+      },
+    });
+    if (!quotation) {
+      return NextResponse.json({ error: "הצעה לא נמצאה" }, { status: 404 });
+    }
+    return NextResponse.json({ quotation });
+  } catch (err: any) {
+    return NextResponse.json(
+      { error: err?.message || "שגיאה בטעינת הצעה" },
+      { status: 500 }
+    );
   }
-  return NextResponse.json({ quotation });
 }
 
 // PUT /api/quotations/[id] — עדכון פריטים / החלפת דגם / הנחה / סטטוס
@@ -43,8 +52,10 @@ export async function PUT(
     }
 
     // שינוי סטטוס בלבד (SENT / VIEWED / ACCEPTED / DECLINED / EXPIRED)
-    if (body.status && Object.values(QuoteStatus).includes(body.status)) {
-      const data: any = { status: body.status };
+    const isValidStatus =
+      body.status && Object.values(QuoteStatus).includes(body.status);
+    if (isValidStatus) {
+      const data: any = { status: body.status as QuoteStatus };
       if (body.status === "SENT") data.sentAt = new Date();
       if (body.status === "VIEWED") data.viewedAt = new Date();
 
@@ -52,28 +63,34 @@ export async function PUT(
 
       // אישור הצעה על ליד — סימון quoteStatus על הליד
       if (body.status === "ACCEPTED" && existing.leadId) {
-        await prisma.lead.update({
-          where: { id: existing.leadId },
-          data: { quoteStatus: "ACCEPTED", quoteSentAt: existing.sentAt },
-        }).catch(() => {});
+        await prisma.lead
+          .update({
+            where: { id: existing.leadId },
+            data: {
+              quoteStatus: "ACCEPTED",
+              quoteSentAt: existing.sentAt ?? undefined,
+            },
+          })
+          .catch(() => {});
       }
       return NextResponse.json({ quotation: updated });
     }
 
     // עדכון פריטים — כולל החלפת דגם
-    // items: [{ id (קיים/חדש), productId, itemType, name, model, description, quantity, unitPrice, isOptional, recommended }]
+    // items: [{ id, productId, itemType, name, model, description, quantity, unitPrice, isOptional, recommended }]
     if (Array.isArray(body.items)) {
       const changes: any[] = [];
 
       // היסטוריית החלפות דגם
       for (const incoming of body.items) {
-        if (!incoming.id) continue;
+        if (!incoming?.id) continue;
         const old = existing.items.find((i) => i.id === incoming.id);
         if (!old) continue;
         const modelChanged =
-          incoming.productId && incoming.productId !== old.productId;
+          incoming.productId != null && incoming.productId !== old.productId;
         const priceChanged =
-          incoming.unitPrice != null && Number(incoming.unitPrice) !== old.unitPrice;
+          incoming.unitPrice != null &&
+          Number(incoming.unitPrice) !== old.unitPrice;
 
         if (modelChanged || priceChanged) {
           changes.push({
@@ -93,7 +110,9 @@ export async function PUT(
       }
 
       // מחיקת פריטים שהוסרו
-      const keepIds = new Set(body.items.filter((i: any) => i.id).map((i: any) => i.id));
+      const keepIds = new Set(
+        body.items.filter((i: any) => i?.id).map((i: any) => i.id)
+      );
       const removed = existing.items.filter((i) => !keepIds.has(i.id));
       if (removed.length > 0) {
         await prisma.quoteItem.deleteMany({
@@ -113,24 +132,26 @@ export async function PUT(
       }
 
       // עדכון / הוספה
+      const validItemTypes = ["PRODUCT", "SERVICE", "FILTER_REPLACEMENT", "INSTALLATION"];
       let sortIdx = 0;
       for (const incoming of body.items) {
-        const qty = Number(incoming.quantity || 1);
-        const price = Number(incoming.unitPrice || 0);
+        const qty = Number(incoming?.quantity || 1);
+        const price = Number(incoming?.unitPrice || 0);
+        const rawType = String(incoming?.itemType || "PRODUCT").toUpperCase();
         const itemData = {
-          productId: incoming.productId || null,
-          itemType: incoming.itemType || "PRODUCT",
-          name: incoming.name || null,
-          model: incoming.model || null,
-          description: incoming.description || "",
+          productId: incoming?.productId || null,
+          itemType: validItemTypes.includes(rawType) ? rawType : "PRODUCT",
+          name: incoming?.name || null,
+          model: incoming?.model || null,
+          description: incoming?.description || "",
           quantity: qty,
           unitPrice: price,
           total: qty * price,
-          isOptional: Boolean(incoming.isOptional),
-          recommended: Boolean(incoming.recommended),
-          sortOrder: incoming.sortOrder ?? sortIdx,
+          isOptional: Boolean(incoming?.isOptional),
+          recommended: Boolean(incoming?.recommended),
+          sortOrder: incoming?.sortOrder ?? sortIdx,
         };
-        if (incoming.id && existing.items.some((i) => i.id === incoming.id)) {
+        if (incoming?.id && existing.items.some((i) => i.id === incoming.id)) {
           await prisma.quoteItem.update({
             where: { id: incoming.id },
             data: itemData,
@@ -141,7 +162,7 @@ export async function PUT(
           });
           changes.push({
             quoteId: id,
-            itemId: incoming.id || "new",
+            itemId: incoming?.id || "new",
             changeType: "ADDED",
             newProductId: itemData.productId,
             newModel: itemData.model,
@@ -182,7 +203,7 @@ export async function PUT(
           total,
           notes: body.notes != null ? body.notes : existing.notes,
         },
-        include: { items: { orderBy: { id: "asc" as const } }, },
+        include: { items: { orderBy: { sortOrder: "asc" } } },
       });
 
       return NextResponse.json({ quotation: updated });
@@ -216,12 +237,16 @@ export async function POST(
       return NextResponse.json({ error: "הצעה לא נמצאה" }, { status: 404 });
     }
 
-    // שמירת צילום מצב של הגרסה הנוכחית
+    // שמירת צילום מצב של הגרסה הנוכחית — המרה ל-JSON תקין (ללא אובייקטי Date)
     await prisma.quoteVersion.create({
       data: {
         quoteId: source.id,
         version: source.version,
-        snapshot: source as any,
+        snapshot: JSON.parse(
+          JSON.stringify(source, (_k, v) =>
+            v instanceof Date ? v.toISOString() : v
+          )
+        ),
         note: body.note || `צילום v${source.version} לפני יצירת גרסה חדשה`,
         createdById: body.createdById || null,
       },
@@ -230,8 +255,18 @@ export async function POST(
     // גרסה חדשה — העתקה מלאה
     const newVersion = source.version + 1;
     const year = new Date().getFullYear();
-    const count = await prisma.quote.count();
-    const number = `QT-${year}-${String(count + 1).padStart(4, "0")}-v${newVersion}`;
+
+    // מספור עם הגנה מפני כפילויות (רייס)
+    let number = "";
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const count = await prisma.quote.count();
+      number = `QT-${year}-${String(count + 1).padStart(4, "0")}-v${newVersion}`;
+      const exists = await prisma.quote.findUnique({ where: { number } });
+      if (!exists) break;
+      // התנגשות — מוסיפים סיומת ייחודית
+      number = `QT-${year}-${String(count + 1).padStart(4, "0")}-v${newVersion}-${Date.now().toString(36)}`;
+      break;
+    }
 
     const copy = await prisma.quote.create({
       data: {
