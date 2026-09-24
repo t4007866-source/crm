@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { QuoteStatus } from "@prisma/client";
+import { QuoteStatus, QuoteItemType } from "@prisma/client";
 
 // GET /api/quotations/[id] — הצעה מלאה כולל היסטוריה וגרסאות
 export async function GET(
@@ -15,7 +15,7 @@ export async function GET(
         customer: true,
         lead: true,
         createdBy: { select: { id: true, name: true } },
-        items: { orderBy: { createdAt: "asc" } },
+        items: { orderBy: { sortOrder: "asc" } },
         itemHistory: { orderBy: { createdAt: "desc" } },
         snapshots: { orderBy: { version: "desc" } },
         versions: {
@@ -132,7 +132,6 @@ export async function PUT(
       }
 
       // עדכון / הוספה
-      const validItemTypes = ["PRODUCT", "SERVICE", "FILTER_REPLACEMENT", "INSTALLATION"];
       let sortIdx = 0;
       for (const incoming of body.items) {
         const qty = Number(incoming?.quantity || 1);
@@ -140,7 +139,9 @@ export async function PUT(
         const rawType = String(incoming?.itemType || "PRODUCT").toUpperCase();
         const itemData = {
           productId: incoming?.productId || null,
-          itemType: validItemTypes.includes(rawType) ? rawType : "PRODUCT",
+          itemType: (Object.values(QuoteItemType) as string[]).includes(rawType)
+            ? (rawType as QuoteItemType)
+            : QuoteItemType.PRODUCT,
           name: incoming?.name || null,
           model: incoming?.model || null,
           description: incoming?.description || "",
@@ -314,4 +315,8 @@ export async function POST(
     );
   }
 }
+
+
+
+
 
