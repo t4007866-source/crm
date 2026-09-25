@@ -139,8 +139,8 @@ export async function PUT(
         const rawType = String(incoming?.itemType || "PRODUCT").toUpperCase();
         const itemData = {
           productId: incoming?.productId || null,
-          itemType: (Object.values("PRODUCT") as string[]).includes(rawType)
-            ? (rawType as "PRODUCT")
+          itemType: (Object.values(QuoteItemType) as string[]).includes(rawType)
+            ? (rawType as QuoteItemType)
             : "PRODUCT",
           name: incoming?.name || null,
           model: incoming?.model || null,
