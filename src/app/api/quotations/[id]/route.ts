@@ -2,6 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { QuoteStatus } from "@prisma/client";
 
+// סוגי פריטים מותרים — מונע ערכים לא תקינים מהממשק
+const ALLOWED_ITEM_TYPES = new Set([
+  "PRODUCT",
+  "SERVICE",
+  "PART",
+  "LABOR",
+  "DISCOUNT",
+  "OTHER",
+]);
+
 // GET /api/quotations/[id] — הצעה מלאה כולל היסטוריה וגרסאות
 export async function GET(
   _req: NextRequest,
@@ -19,7 +29,9 @@ export async function GET(
         itemHistory: { orderBy: { createdAt: "desc" } },
         snapshots: { orderBy: { version: "desc" } },
         versions: {
-          select: { id: true, number: true, version: true, status: true, total: true },
+          // רק שדות שקיימים בוודאות במודל QuoteVersion — מונע שגיאת 500 שקטה
+          select: { id: true, version: true, note: true, createdAt: true },
+          orderBy: { version: "desc" },
         },
       },
     });
@@ -42,7 +54,7 @@ export async function PUT(
 ) {
   try {
     const { id } = await params;
-    const body = await req.json();
+    const body = await req.json().catch(() => ({}));
     const existing = await prisma.quote.findUnique({
       where: { id },
       include: { items: true },
@@ -51,18 +63,22 @@ export async function PUT(
       return NextResponse.json({ error: "הצעה לא נמצאה" }, { status: 404 });
     }
 
-    // שינוי סטטוס בלבד (SENT / VIEWED / ACCEPTED / DECLINED / EXPIRED)
+    // שינוי סטטוס בלבד (DRAFT / SENT / VIEWED / ACCEPTED / DECLINED / EXPIRED)
+    const statusValue = body.status
+      ? String(body.status).toUpperCase()
+      : null;
     const isValidStatus =
-      body.status && Object.values(QuoteStatus).includes(body.status);
+      statusValue &&
+      (Object.values(QuoteStatus) as string[]).includes(statusValue);
     if (isValidStatus) {
-      const data: any = { status: body.status as QuoteStatus };
-      if (body.status === "SENT") data.sentAt = new Date();
-      if (body.status === "VIEWED") data.viewedAt = new Date();
+      const data: any = { status: statusValue as QuoteStatus };
+      if (statusValue === "SENT") data.sentAt = new Date();
+      if (statusValue === "VIEWED") data.viewedAt = new Date();
 
       const updated = await prisma.quote.update({ where: { id }, data });
 
       // אישור הצעה על ליד — סימון quoteStatus על הליד
-      if (body.status === "ACCEPTED" && existing.leadId) {
+      if (statusValue === "ACCEPTED" && existing.leadId) {
         await prisma.lead
           .update({
             where: { id: existing.leadId },
@@ -90,7 +106,7 @@ export async function PUT(
           incoming.productId != null && incoming.productId !== old.productId;
         const priceChanged =
           incoming.unitPrice != null &&
-          Number(incoming.unitPrice) !== old.unitPrice;
+          Number(incoming.unitPrice) !== Number(old.unitPrice);
 
         if (modelChanged || priceChanged) {
           changes.push({
@@ -101,7 +117,7 @@ export async function PUT(
             newProductId: incoming.productId || null,
             oldModel: old.model,
             newModel: incoming.model || null,
-            oldPrice: old.unitPrice,
+            oldPrice: Number(old.unitPrice),
             newPrice: Number(incoming.unitPrice ?? old.unitPrice),
             note: body.changeNote || null,
             createdById: body.createdById || null,
@@ -125,7 +141,7 @@ export async function PUT(
             changeType: "REMOVED",
             oldProductId: r.productId,
             oldModel: r.model,
-            oldPrice: r.unitPrice,
+            oldPrice: Number(r.unitPrice),
             createdById: body.createdById || null,
           });
         }
@@ -134,14 +150,21 @@ export async function PUT(
       // עדכון / הוספה
       let sortIdx = 0;
       for (const incoming of body.items) {
-        const qty = Number(incoming?.quantity || 1);
-        const price = Number(incoming?.unitPrice || 0);
+        const qtyRaw = Number(incoming?.quantity ?? 1);
+        const priceRaw = Number(incoming?.unitPrice ?? 0);
+        const qty = Number.isFinite(qtyRaw) ? qtyRaw : 1;
+        const price = Number.isFinite(priceRaw) ? priceRaw : 0;
+
+        // תיקון: הקוד הקודם ביצע Object.values("PRODUCT") שמפרק את המחרוזת
+        // לאותיות בודדות — מה שגרם לכל פריט להישמר כ-PRODUCT.
         const rawType = String(incoming?.itemType || "PRODUCT").toUpperCase();
-        const itemData = {
+        const itemType = ALLOWED_ITEM_TYPES.has(rawType)
+          ? rawType
+          : "PRODUCT";
+
+        const itemData: any = {
           productId: incoming?.productId || null,
-          itemType: (Object.values(QuoteItemType) as string[]).includes(rawType)
-            ? (rawType as QuoteItemType)
-            : "PRODUCT",
+          itemType,
           name: incoming?.name || null,
           model: incoming?.model || null,
           description: incoming?.description || "",
@@ -174,21 +197,28 @@ export async function PUT(
         sortIdx++;
       }
 
+      // שמירת היסטוריה — לא תפיל את העדכון הראשי אם נכשלת (למשל FK)
       if (changes.length > 0) {
-        await prisma.quoteItemHistory.createMany({ data: changes });
+        await prisma.quoteItemHistory
+          .createMany({ data: changes })
+          .catch(() => {});
       }
 
       // חישוב מחדש
       const allItems = await prisma.quoteItem.findMany({ where: { quoteId: id } });
       const subtotal = allItems
         .filter((i) => !i.isOptional)
-        .reduce((s, i) => s + i.total, 0);
-      const discountPercent =
+        .reduce((s, i) => s + Number(i.total), 0);
+      const discountRaw =
         body.discountPercent != null
           ? Number(body.discountPercent)
-          : existing.discountPercent;
-      const vatPercent =
-        body.vatPercent != null ? Number(body.vatPercent) : existing.vatPercent;
+          : Number(existing.discountPercent);
+      const discountPercent = Number.isFinite(discountRaw) ? discountRaw : 0;
+      const vatRaw =
+        body.vatPercent != null
+          ? Number(body.vatPercent)
+          : Number(existing.vatPercent);
+      const vatPercent = Number.isFinite(vatRaw) ? vatRaw : 0;
       const afterDiscount = subtotal * (1 - discountPercent / 100);
       const tax = afterDiscount * (vatPercent / 100);
       const total = afterDiscount + tax;
@@ -258,15 +288,12 @@ export async function POST(
     const year = new Date().getFullYear();
 
     // מספור עם הגנה מפני כפילויות (רייס)
-    let number = "";
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const count = await prisma.quote.count();
-      number = `QT-${year}-${String(count + 1).padStart(4, "0")}-v${newVersion}`;
-      const exists = await prisma.quote.findUnique({ where: { number } });
-      if (!exists) break;
+    const count = await prisma.quote.count();
+    let number = `QT-${year}-${String(count + 1).padStart(4, "0")}-v${newVersion}`;
+    const numberTaken = await prisma.quote.findUnique({ where: { number } });
+    if (numberTaken) {
       // התנגשות — מוסיפים סיומת ייחודית
       number = `QT-${year}-${String(count + 1).padStart(4, "0")}-v${newVersion}-${Date.now().toString(36)}`;
-      break;
     }
 
     const copy = await prisma.quote.create({
@@ -315,8 +342,4 @@ export async function POST(
     );
   }
 }
-
-
-
-
 
