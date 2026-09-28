@@ -23,7 +23,7 @@ export async function GET(
       where: { id },
       include: {
         customer: true,
-        lead: true,
+      
         createdBy: { select: { id: true, name: true } },
         items: { orderBy: { id: "asc" } },
         itemHistory: { orderBy: { createdAt: "desc" } },

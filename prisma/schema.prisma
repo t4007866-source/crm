@@ -507,7 +507,9 @@ model Quote {
 
   @@index([customerId])
   @@index([status])
+itemHistory QuoteItemHistory[]
 }
+
 
 model QuoteItem {
   id          String        @id @default(cuid())
