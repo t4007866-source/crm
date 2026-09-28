@@ -27,10 +27,22 @@ export async function GET(
         createdBy: { select: { id: true, name: true } },
         items: { orderBy: { sortOrder: "asc" } },
         itemHistory: { orderBy: { createdAt: "desc" } },
-        snapshots: { orderBy: { version: "desc" } },
-        versions: {
-          // רק שדות שקיימים בוודאות במודל QuoteVersion — מונע שגיאת 500 שקטה
+        snapshots: {
+          // QuoteVersion[] — כאן שייך השדה note
           select: { id: true, version: true, note: true, createdAt: true },
+          orderBy: { version: "desc" },
+        },
+        versions: {
+          // versions הוא קשר עצמי Quote[] (היסטוריית גרסאות לפי parentQuoteId)
+          select: {
+            id: true,
+            number: true,
+            version: true,
+            title: true,
+            status: true,
+            total: true,
+            createdAt: true,
+          },
           orderBy: { version: "desc" },
         },
       },
@@ -342,4 +354,5 @@ export async function POST(
     );
   }
 }
+
 
