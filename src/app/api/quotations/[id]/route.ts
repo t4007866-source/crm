@@ -25,7 +25,7 @@ export async function GET(
         customer: true,
         lead: true,
         createdBy: { select: { id: true, name: true } },
-        items: { orderBy: { sortOrder: "asc" } },
+        items: { orderBy: { id: "asc" } },
         itemHistory: { orderBy: { createdAt: "desc" } },
         snapshots: {
           // QuoteVersion[] — כאן שייך השדה note
