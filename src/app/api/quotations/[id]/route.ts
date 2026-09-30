@@ -80,6 +80,7 @@ export async function PUT(
       return NextResponse.json({ error: "הצעה לא נמצאה" }, { status: 404 });
     }
 
+<<<<<<< HEAD
     // תאימות לטיפוס Prisma Client: הפריטים נטענים עם include בזמן ריצה,
     // אך הטיפוס שנוצר כרגע אינו כולל את השדות המורחבים של QuoteItem.
     const existingItems = existing.items as Array<{
@@ -89,6 +90,8 @@ export async function PUT(
       unitPrice: number;
     }>;
 
+=======
+>>>>>>> 0d4ffc79b901f091eba6aaae6e86302a2e00bdcc
     // שינוי סטטוס בלבד (DRAFT / SENT / VIEWED / ACCEPTED / DECLINED / EXPIRED)
     const statusValue = body.status
       ? String(body.status).toUpperCase()
@@ -126,7 +129,11 @@ export async function PUT(
         // היסטוריית החלפות דגם ושינויי מחיר
         for (const incoming of body.items) {
           if (!incoming?.id) continue;
+<<<<<<< HEAD
           const old = existingItems.find((i) => i.id === incoming.id);
+=======
+          const old = existing.items.find((i) => i.id === incoming.id);
+>>>>>>> 0d4ffc79b901f091eba6aaae6e86302a2e00bdcc
           if (!old) continue;
           const modelChanged =
             incoming.productId != null && incoming.productId !== old.productId;
@@ -155,7 +162,11 @@ export async function PUT(
         const keepIds = new Set(
           body.items.filter((i: any) => i?.id).map((i: any) => i.id)
         );
+<<<<<<< HEAD
         const removed = existingItems.filter((i) => !keepIds.has(i.id));
+=======
+        const removed = existing.items.filter((i) => !keepIds.has(i.id));
+>>>>>>> 0d4ffc79b901f091eba6aaae6e86302a2e00bdcc
         if (removed.length > 0) {
           await tx.quoteItem.deleteMany({
             where: { id: { in: removed.map((i) => i.id) } },
@@ -206,7 +217,11 @@ export async function PUT(
           };
           if (
             incoming?.id &&
+<<<<<<< HEAD
             existingItems.some((i) => i.id === incoming.id)
+=======
+            existing.items.some((i) => i.id === incoming.id)
+>>>>>>> 0d4ffc79b901f091eba6aaae6e86302a2e00bdcc
           ) {
             await tx.quoteItem.update({
               where: { id: incoming.id },
