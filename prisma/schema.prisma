@@ -162,6 +162,10 @@ enum QuoteItemType {
   PRODUCT
   SERVICE
   UPGRADE
+  PART
+  LABOR
+  DISCOUNT
+  OTHER
 }
 
 enum OrderStatus {
@@ -507,7 +511,6 @@ model Quote {
 
   @@index([customerId])
   @@index([status])
-itemHistory QuoteItemHistory[]
 }
 
 

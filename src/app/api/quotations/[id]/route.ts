@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { QuoteStatus } from "@prisma/client";
+import { QuoteStatus, QuoteItemType } from "@prisma/client";
 
 // סוגי פריטים מותרים — מונע ערכים לא תקינים מהממשק
 const ALLOWED_ITEM_TYPES = new Set([
   "PRODUCT",
   "SERVICE",
+  "UPGRADE",
   "PART",
   "LABOR",
   "DISCOUNT",
@@ -19,21 +20,14 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
+
     const quotation = await prisma.quote.findUnique({
       where: { id },
       include: {
-        customer: true,
-      
         createdBy: { select: { id: true, name: true } },
         items: { orderBy: { id: "asc" } },
-        itemHistory: { orderBy: { createdAt: "desc" } },
-        snapshots: {
-          // QuoteVersion[] — כאן שייך השדה note
-          select: { id: true, version: true, note: true, createdAt: true },
-          orderBy: { version: "desc" },
-        },
+        // versions הוא קשר עצמי Quote[] (היסטוריית גרסאות לפי parentQuoteId)
         versions: {
-          // versions הוא קשר עצמי Quote[] (היסטוריית גרסאות לפי parentQuoteId)
           select: {
             id: true,
             number: true,
@@ -41,12 +35,14 @@ export async function GET(
             title: true,
             status: true,
             total: true,
+            notes: true,
             createdAt: true,
           },
           orderBy: { version: "desc" },
         },
       },
     });
+
     if (!quotation) {
       return NextResponse.json({ error: "הצעה לא נמצאה" }, { status: 404 });
     }
@@ -66,7 +62,10 @@ export async function PUT(
 ) {
   try {
     const { id } = await params;
+
+    // ברירת מחדל {} במקום null — body.status לא יפיל את השרת
     const body = await req.json().catch(() => ({}));
+
     const existing = await prisma.quote.findUnique({
       where: { id },
       include: { items: true },
@@ -109,147 +108,166 @@ export async function PUT(
     if (Array.isArray(body.items)) {
       const changes: any[] = [];
 
-      // היסטוריית החלפות דגם
-      for (const incoming of body.items) {
-        if (!incoming?.id) continue;
-        const old = existing.items.find((i) => i.id === incoming.id);
-        if (!old) continue;
-        const modelChanged =
-          incoming.productId != null && incoming.productId !== old.productId;
-        const priceChanged =
-          incoming.unitPrice != null &&
-          Number(incoming.unitPrice) !== Number(old.unitPrice);
+      // תיקון מרכזי: כל עדכון הפריטים רץ בטרנזקציה אחת —
+      // או שהכול מתבצע (מחיקות + עדכונים + הוספות + היסטוריה + חישוב מחדש), או שכלום.
+      // בגרסה הקודמת כשל באמצע הותיר את ההצעה במצב חלקי.
+      const quotation = await prisma.$transaction(async (tx) => {
+        // היסטוריית החלפות דגם ושינויי מחיר
+        for (const incoming of body.items) {
+          if (!incoming?.id) continue;
+          const old = existing.items.find((i) => i.id === incoming.id);
+          if (!old) continue;
+          const modelChanged =
+            incoming.productId != null && incoming.productId !== old.productId;
+          const priceChanged =
+            incoming.unitPrice != null &&
+            Number(incoming.unitPrice) !== Number(old.unitPrice);
 
-        if (modelChanged || priceChanged) {
-          changes.push({
-            quoteId: id,
-            itemId: old.id,
-            changeType: modelChanged ? "MODEL_SWAPPED" : "PRICE_CHANGED",
-            oldProductId: old.productId,
-            newProductId: incoming.productId || null,
-            oldModel: old.model,
-            newModel: incoming.model || null,
-            oldPrice: Number(old.unitPrice),
-            newPrice: Number(incoming.unitPrice ?? old.unitPrice),
-            note: body.changeNote || null,
-            createdById: body.createdById || null,
-          });
+          if (modelChanged || priceChanged) {
+            changes.push({
+              quoteId: id,
+              itemId: old.id,
+              changeType: modelChanged ? "MODEL_SWAPPED" : "PRICE_CHANGED",
+              oldProductId: old.productId,
+              newProductId: incoming.productId || null,
+              oldModel: old.model,
+              newModel: incoming.model || null,
+              oldPrice: Number(old.unitPrice),
+              newPrice: Number(incoming.unitPrice ?? old.unitPrice),
+              note: body.changeNote || null,
+              createdById: body.createdById || null,
+            });
+          }
         }
-      }
 
-      // מחיקת פריטים שהוסרו
-      const keepIds = new Set(
-        body.items.filter((i: any) => i?.id).map((i: any) => i.id)
-      );
-      const removed = existing.items.filter((i) => !keepIds.has(i.id));
-      if (removed.length > 0) {
-        await prisma.quoteItem.deleteMany({
-          where: { id: { in: removed.map((i) => i.id) } },
+        // מחיקת פריטים שהוסרו
+        const keepIds = new Set(
+          body.items.filter((i: any) => i?.id).map((i: any) => i.id)
+        );
+        const removed = existing.items.filter((i) => !keepIds.has(i.id));
+        if (removed.length > 0) {
+          await tx.quoteItem.deleteMany({
+            where: { id: { in: removed.map((i) => i.id) } },
+          });
+          for (const r of removed) {
+            changes.push({
+              quoteId: id,
+              itemId: r.id,
+              changeType: "REMOVED",
+              oldProductId: r.productId,
+              oldModel: r.model,
+              oldPrice: Number(r.unitPrice),
+              createdById: body.createdById || null,
+            });
+          }
+        }
+
+        // עדכון / הוספה
+        let sortIdx = 0;
+        for (const incoming of body.items) {
+          const qtyRaw = Number(incoming?.quantity ?? 1);
+          const priceRaw = Number(incoming?.unitPrice ?? 0);
+          // הגבלת קלט: מספר סופי ולא שלילי
+          const qty = Number.isFinite(qtyRaw) && qtyRaw > 0 ? qtyRaw : 1;
+          const price =
+            Number.isFinite(priceRaw) && priceRaw >= 0 ? priceRaw : 0;
+
+          const rawType = String(
+            incoming?.itemType || "PRODUCT"
+          ).toUpperCase();
+          const itemType = (
+            ALLOWED_ITEM_TYPES.has(rawType) &&
+            (Object.values(QuoteItemType) as string[]).includes(rawType)
+              ? (rawType as QuoteItemType)
+              : QuoteItemType.PRODUCT
+          );
+
+          const itemData: any = {
+            productId: incoming?.productId || null,
+            itemType,
+            name: incoming?.name || null,
+            model: incoming?.model || null,
+            description: incoming?.description || "",
+            quantity: qty,
+            unitPrice: price,
+            total: qty * price,
+            isOptional: Boolean(incoming?.isOptional),
+            recommended: Boolean(incoming?.recommended),
+            sortOrder: incoming?.sortOrder ?? sortIdx,
+          };
+          if (
+            incoming?.id &&
+            existing.items.some((i) => i.id === incoming.id)
+          ) {
+            await tx.quoteItem.update({
+              where: { id: incoming.id },
+              data: itemData,
+            });
+          } else {
+            await tx.quoteItem.create({
+              data: { ...itemData, quoteId: id },
+            });
+            changes.push({
+              quoteId: id,
+              itemId: incoming?.id || "new",
+              changeType: "ADDED",
+              newProductId: itemData.productId,
+              newModel: itemData.model,
+              newPrice: price,
+              createdById: body.createdById || null,
+            });
+          }
+          sortIdx++;
+        }
+
+        // שמירת היסטוריה — לא תפיל את העדכון הראשי אם נכשלת (למשל FK)
+        if (changes.length > 0) {
+          await tx.quoteItemHistory
+            .createMany({ data: changes })
+            .catch(() => {});
+        }
+
+        // חישוב מחדש
+        const allItems = await tx.quoteItem.findMany({
+          where: { quoteId: id },
         });
-        for (const r of removed) {
-          changes.push({
-            quoteId: id,
-            itemId: r.id,
-            changeType: "REMOVED",
-            oldProductId: r.productId,
-            oldModel: r.model,
-            oldPrice: Number(r.unitPrice),
-            createdById: body.createdById || null,
-          });
-        }
-      }
+        const subtotal = allItems
+          .filter((i) => !i.isOptional)
+          .reduce((s, i) => s + Number(i.total), 0);
+        const discountRaw =
+          body.discountPercent != null
+            ? Number(body.discountPercent)
+            : Number(existing.discountPercent);
+        const discountPercent = Number.isFinite(discountRaw)
+          ? Math.min(Math.max(discountRaw, 0), 100)
+          : 0;
+        const vatRaw =
+          body.vatPercent != null
+            ? Number(body.vatPercent)
+            : Number(existing.vatPercent);
+        const vatPercent = Number.isFinite(vatRaw)
+          ? Math.min(Math.max(vatRaw, 0), 100)
+          : 0;
+        const afterDiscount = subtotal * (1 - discountPercent / 100);
+        const tax = afterDiscount * (vatPercent / 100);
+        const total = afterDiscount + tax;
 
-      // עדכון / הוספה
-      let sortIdx = 0;
-      for (const incoming of body.items) {
-        const qtyRaw = Number(incoming?.quantity ?? 1);
-        const priceRaw = Number(incoming?.unitPrice ?? 0);
-        const qty = Number.isFinite(qtyRaw) ? qtyRaw : 1;
-        const price = Number.isFinite(priceRaw) ? priceRaw : 0;
-
-        // תיקון: הקוד הקודם ביצע Object.values("PRODUCT") שמפרק את המחרוזת
-        // לאותיות בודדות — מה שגרם לכל פריט להישמר כ-PRODUCT.
-        const rawType = String(incoming?.itemType || "PRODUCT").toUpperCase();
-        const itemType = ALLOWED_ITEM_TYPES.has(rawType)
-          ? rawType
-          : "PRODUCT";
-
-        const itemData: any = {
-          productId: incoming?.productId || null,
-          itemType,
-          name: incoming?.name || null,
-          model: incoming?.model || null,
-          description: incoming?.description || "",
-          quantity: qty,
-          unitPrice: price,
-          total: qty * price,
-          isOptional: Boolean(incoming?.isOptional),
-          recommended: Boolean(incoming?.recommended),
-          sortOrder: incoming?.sortOrder ?? sortIdx,
-        };
-        if (incoming?.id && existing.items.some((i) => i.id === incoming.id)) {
-          await prisma.quoteItem.update({
-            where: { id: incoming.id },
-            data: itemData,
-          });
-        } else {
-          await prisma.quoteItem.create({
-            data: { ...itemData, quoteId: id },
-          });
-          changes.push({
-            quoteId: id,
-            itemId: incoming?.id || "new",
-            changeType: "ADDED",
-            newProductId: itemData.productId,
-            newModel: itemData.model,
-            newPrice: price,
-            createdById: body.createdById || null,
-          });
-        }
-        sortIdx++;
-      }
-
-      // שמירת היסטוריה — לא תפיל את העדכון הראשי אם נכשלת (למשל FK)
-      if (changes.length > 0) {
-        await prisma.quoteItemHistory
-          .createMany({ data: changes })
-          .catch(() => {});
-      }
-
-      // חישוב מחדש
-      const allItems = await prisma.quoteItem.findMany({ where: { quoteId: id } });
-      const subtotal = allItems
-        .filter((i) => !i.isOptional)
-        .reduce((s, i) => s + Number(i.total), 0);
-      const discountRaw =
-        body.discountPercent != null
-          ? Number(body.discountPercent)
-          : Number(existing.discountPercent);
-      const discountPercent = Number.isFinite(discountRaw) ? discountRaw : 0;
-      const vatRaw =
-        body.vatPercent != null
-          ? Number(body.vatPercent)
-          : Number(existing.vatPercent);
-      const vatPercent = Number.isFinite(vatRaw) ? vatRaw : 0;
-      const afterDiscount = subtotal * (1 - discountPercent / 100);
-      const tax = afterDiscount * (vatPercent / 100);
-      const total = afterDiscount + tax;
-
-      const updated = await prisma.quote.update({
-        where: { id },
-        data: {
-          subtotal,
-          discountPercent,
-          vatPercent,
-          totalBeforeDiscount: subtotal,
-          tax,
-          total,
-          notes: body.notes != null ? body.notes : existing.notes,
-        },
-        include: { items: { orderBy: { sortOrder: "asc" } } },
+        return tx.quote.update({
+          where: { id },
+          data: {
+            subtotal,
+            discountPercent,
+            vatPercent,
+            totalBeforeDiscount: subtotal,
+            tax,
+            total,
+            notes: body.notes != null ? String(body.notes) : existing.notes,
+          },
+          include: { items: { orderBy: { id: "asc" } } },
+        });
       });
 
-      return NextResponse.json({ quotation: updated });
+      return NextResponse.json({ quotation });
     }
 
     return NextResponse.json(
@@ -299,13 +317,14 @@ export async function POST(
     const newVersion = source.version + 1;
     const year = new Date().getFullYear();
 
-    // מספור עם הגנה מפני כפילויות (רייס)
+    // מספור עם הגנה מפני כפילויות (רייס):
+    // בגרסה הקודמת הבדיקה בוצעה פעם אחת בלבד — כשל unique היה מפיל את הבקשה.
     const count = await prisma.quote.count();
     let number = `QT-${year}-${String(count + 1).padStart(4, "0")}-v${newVersion}`;
-    const numberTaken = await prisma.quote.findUnique({ where: { number } });
-    if (numberTaken) {
-      // התנגשות — מוסיפים סיומת ייחודית
-      number = `QT-${year}-${String(count + 1).padStart(4, "0")}-v${newVersion}-${Date.now().toString(36)}`;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const taken = await prisma.quote.findUnique({ where: { number } });
+      if (!taken) break;
+      number = `QT-${year}-${String(count + 1).padStart(4, "0")}-v${newVersion}-${Date.now().toString(36)}${attempt > 0 ? `-${attempt}` : ""}`;
     }
 
     const copy = await prisma.quote.create({
@@ -354,5 +373,4 @@ export async function POST(
     );
   }
 }
-
 
