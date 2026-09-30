@@ -13,7 +13,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ key
   if (!raw) return NextResponse.json({ error: "Payload ריק" }, { status: 400 });
   const webhook = integration.webhooks[0];
   const signature = req.headers.get("x-webhook-signature") || req.headers.get("x-signature");
-  if (webhook?.secretHash && signature && !safeCompare(signature, signPayload(raw, webhook.secretHash))) return NextResponse.json({ error: "חתימת Webhook לא תקינה" }, { status: 401 });
+  if (webhook?.secretHash && (!signature || !safeCompare(signature, signPayload(raw, webhook.secretHash)))) return NextResponse.json({ error: "חתימת Webhook לא תקינה" }, { status: 401 });
   const payload = JSON.parse(raw);
   const externalEventId = req.headers.get("x-idempotency-key") || req.headers.get("x-event-id") || hash(raw);
   const existing = await prisma.externalEvent.findUnique({ where: { provider_externalEventId: { provider: key, externalEventId } } });

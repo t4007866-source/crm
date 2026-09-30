@@ -1,8 +1,17 @@
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { QuoteStatus, QuoteItemType } from "@prisma/client";
+import { QuoteStatus } from "@prisma/client";
 
-// סוגי פריטים מותרים — מונע ערכים לא תקינים מהממשק
+// סוגי פריטים — מוגדרים כרשימת ערכים כדי שנוכל גם לבדוק חברות בזמן ריצה
+const QuoteItemTypes = ["PRODUCT", "SERVICE", "LABOR", "DISCOUNT"] as const;
+type QuoteItemType = (typeof QuoteItemTypes)[number];
+
+const isQuoteItemType = (v: string): v is QuoteItemType =>
+  (QuoteItemTypes as readonly string[]).includes(v);
+
+// ערכים מהממשק שאינם סוג פריט תקין ימופו ל־PRODUCT
 const ALLOWED_ITEM_TYPES = new Set([
   "PRODUCT",
   "SERVICE",
@@ -18,35 +27,28 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) {
+    return NextResponse.json({ error: "נדרשת התחברות" }, { status: 401 });
+  }
   try {
     const { id } = await params;
 
-    const quotation = await prisma.quote.findUnique({
+    const quote = await prisma.quote.findUnique({
       where: { id },
-      include: {
-        createdBy: { select: { id: true, name: true } },
-        items: { orderBy: { id: "asc" } },
-        // versions הוא קשר עצמי Quote[] (היסטוריית גרסאות לפי parentQuoteId)
-        versions: {
-          select: {
-            id: true,
-            number: true,
-            version: true,
-            title: true,
-            status: true,
-            total: true,
-            notes: true,
-            createdAt: true,
-          },
-          orderBy: { version: "desc" },
-        },
+      select: {
+        id: true,
+        number: true,
+        customer: { select: { id: true, name: true, phone: true } },
+        items: true,
       },
     });
 
-    if (!quotation) {
+    if (!quote) {
       return NextResponse.json({ error: "הצעה לא נמצאה" }, { status: 404 });
     }
-    return NextResponse.json({ quotation });
+
+    return NextResponse.json({ quotation: quote });
   } catch (err: any) {
     return NextResponse.json(
       { error: err?.message || "שגיאה בטעינת הצעה" },
@@ -60,6 +62,10 @@ export async function PUT(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) {
+    return NextResponse.json({ error: "נדרשת התחברות" }, { status: 401 });
+  }
   try {
     const { id } = await params;
 
@@ -89,17 +95,13 @@ export async function PUT(
       const updated = await prisma.quote.update({ where: { id }, data });
 
       // אישור הצעה על ליד — סימון quoteStatus על הליד
-      if (statusValue === "ACCEPTED" && existing.leadId) {
-        await prisma.lead
-          .update({
-            where: { id: existing.leadId },
-            data: {
-              quoteStatus: "ACCEPTED",
-              quoteSentAt: existing.sentAt ?? undefined,
-            },
-          })
-          .catch(() => {});
+      if (statusValue === "ACCEPTED" && (existing as any).leadId) {
+        await prisma.lead.update({
+          where: { id: (existing as any).leadId },
+          data: { quoteStatus: "ACCEPTED" },
+        });
       }
+
       return NextResponse.json({ quotation: updated });
     }
 
@@ -108,7 +110,7 @@ export async function PUT(
     if (Array.isArray(body.items)) {
       const changes: any[] = [];
 
-      // תיקון מרכזי: כל עדכון הפריטים רץ בטרנזקציה אחת —
+      // כל עדכון הפריטים רץ בטרנזקציה אחת —
       // או שהכול מתבצע (מחיקות + עדכונים + הוספות + היסטוריה + חישוב מחדש), או שכלום.
       // בגרסה הקודמת כשל באמצע הותיר את ההצעה במצב חלקי.
       const quotation = await prisma.$transaction(async (tx) => {
@@ -175,12 +177,10 @@ export async function PUT(
           const rawType = String(
             incoming?.itemType || "PRODUCT"
           ).toUpperCase();
-          const itemType = (
-            ALLOWED_ITEM_TYPES.has(rawType) &&
-            (Object.values(QuoteItemType) as string[]).includes(rawType)
-              ? (rawType as QuoteItemType)
-              : QuoteItemType.PRODUCT
-          );
+          const itemType: QuoteItemType =
+            ALLOWED_ITEM_TYPES.has(rawType) && isQuoteItemType(rawType)
+              ? rawType
+              : "PRODUCT";
 
           const itemData: any = {
             productId: incoming?.productId || null,
@@ -287,6 +287,10 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) {
+    return NextResponse.json({ error: "נדרשת התחברות" }, { status: 401 });
+  }
   try {
     const { id } = await params;
     const body = await req.json().catch(() => ({}));

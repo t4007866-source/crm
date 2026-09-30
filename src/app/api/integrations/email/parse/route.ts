@@ -13,7 +13,10 @@ export async function POST(request: NextRequest) {
     const expectedKey = process.env.PUBLIC_API_KEY;
     const suppliedKey = request.headers.get("x-api-key");
 
-    if (expectedKey && suppliedKey !== expectedKey) {
+    if (!expectedKey) {
+      return NextResponse.json({ error: "PUBLIC_API_KEY לא מוגדר בשרת" }, { status: 503 });
+    }
+    if (!suppliedKey || suppliedKey !== expectedKey) {
       return NextResponse.json({ error: "מפתח API לא תקין" }, { status: 401 });
     }
 

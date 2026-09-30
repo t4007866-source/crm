@@ -1,9 +1,15 @@
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { QuoteStatus } from "@prisma/client";
 
 // GET /api/quotations — רשימת הצעות מחיר
 export async function GET(req: NextRequest) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) {
+    return NextResponse.json({ error: "נדרשת התחברות" }, { status: 401 });
+  }
   const { searchParams } = new URL(req.url);
   const status = searchParams.get("status");
   const customerId = searchParams.get("customerId");
@@ -33,6 +39,10 @@ export async function GET(req: NextRequest) {
 
 // POST /api/quotations — יצירת הצעה חדשה
 export async function POST(req: NextRequest) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) {
+    return NextResponse.json({ error: "נדרשת התחברות" }, { status: 401 });
+  }
   try {
     const body = await req.json();
     const {
