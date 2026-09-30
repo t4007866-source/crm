@@ -1,0 +1,1 @@
+src/app/api/installed-systems/[id]/route.ts
