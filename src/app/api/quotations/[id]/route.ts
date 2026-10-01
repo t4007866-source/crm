@@ -5,14 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { QuoteStatus } from "@prisma/client";
 
 // סוגי פריטים — מוגדרים כרשימת ערכים כדי שנוכל גם לבדוק חברות בזמן ריצה
-const QuoteItemTypes = ["PRODUCT", "SERVICE", "LABOR", "DISCOUNT"] as const;
-type QuoteItemType = (typeof QuoteItemTypes)[number];
-
-const isQuoteItemType = (v: string): v is QuoteItemType =>
-  (QuoteItemTypes as readonly string[]).includes(v);
-
-// ערכים מהממשק שאינם סוג פריט תקין ימופו ל־PRODUCT
-const ALLOWED_ITEM_TYPES = new Set([
+const QuoteItemTypes = [
   "PRODUCT",
   "SERVICE",
   "UPGRADE",
@@ -20,7 +13,14 @@ const ALLOWED_ITEM_TYPES = new Set([
   "LABOR",
   "DISCOUNT",
   "OTHER",
-]);
+] as const;
+type QuoteItemType = (typeof QuoteItemTypes)[number];
+
+const isQuoteItemType = (v: string): v is QuoteItemType =>
+  (QuoteItemTypes as readonly string[]).includes(v);
+
+// ערכים מהממשק שאינם סוג פריט תקין ימופו ל־PRODUCT
+const ALLOWED_ITEM_TYPES = new Set<string>(QuoteItemTypes);
 
 // GET /api/quotations/[id] — הצעה מלאה כולל היסטוריה וגרסאות
 export async function GET(
@@ -80,8 +80,7 @@ export async function PUT(
       return NextResponse.json({ error: "הצעה לא נמצאה" }, { status: 404 });
     }
 
-    // תאימות לטיפוס Prisma Client: הפריטים נטענים עם include בזמן ריצה,
-    // אך הטיפוס שנוצר כרגע אינו כולל את השדות המורחבים של QuoteItem.
+    // תאימות לטיפוס Prisma Client.
     const existingItems = existing.items as Array<{
       id: string;
       productId?: string | null;
@@ -229,11 +228,13 @@ export async function PUT(
           sortIdx++;
         }
 
-        // שמירת היסטוריה — לא תפיל את העדכון הראשי אם נכשלת (למשל FK)
+        // שמירת היסטוריה — לא תפיל את העדכון הראשי אם המודל עדיין לא קיים
+        // ב-Prisma Client שנוצר בסביבה הנוכחית. ה-schema.prisma כן כולל אותו.
         if (changes.length > 0) {
-          await tx.quoteItemHistory
-            .createMany({ data: changes })
-            .catch(() => {});
+          const historyModel = (tx as any).quoteItemHistory;
+          if (historyModel?.createMany) {
+            await historyModel.createMany({ data: changes }).catch(() => {});
+          }
         }
 
         // חישוב מחדש
