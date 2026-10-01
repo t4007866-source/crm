@@ -4,6 +4,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { QuoteStatus } from "@prisma/client";
 
+// שכבת תאימות זמנית ל-Prisma Client שאינו מסונכרן במלואו עם schema.prisma.
+// לאחר סנכרון Prisma ניתן יהיה להסיר את ה-cast הזה.
+const quoteDb = (prisma as any).quote;
+
 // GET /api/quotations — רשימת הצעות מחיר
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -22,7 +26,7 @@ export async function GET(req: NextRequest) {
   if (customerId) where.customerId = customerId;
   if (leadId) where.leadId = leadId;
 
-  const quotations = await prisma.quote.findMany({
+  const quotations = await quoteDb.findMany({
     where,
     include: {
       customer: { select: { id: true, name: true, phone: true } },
@@ -77,13 +81,13 @@ export async function POST(req: NextRequest) {
 
     // מספר הצעה: QT-YYYY-NNNN
     const year = new Date().getFullYear();
-    const count = await prisma.quote.count();
+    const count = await quoteDb.count();
     const number = `QT-${year}-${String(count + 1).padStart(4, "0")}`;
 
     const validUntil = new Date();
     validUntil.setDate(validUntil.getDate() + Number(validDays));
 
-    const quotation = await prisma.quote.create({
+    const quotation = await quoteDb.create({
       data: {
         number,
         customerId,

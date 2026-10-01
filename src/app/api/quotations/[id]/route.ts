@@ -80,8 +80,12 @@ export async function PUT(
       return NextResponse.json({ error: "הצעה לא נמצאה" }, { status: 404 });
     }
 
+    // Prisma Client בסביבה הזו אינו מסונכרן עדיין עם כל שדות ה-schema.
+    // נשתמש בתצוגת תאימות מקומית כדי למנוע שגיאות TypeScript עד generate מלא.
+    const existingCompat = existing as any;
+
     // תאימות לטיפוס Prisma Client.
-    const existingItems = existing.items as Array<{
+    const existingItems = existing.items as unknown as Array<{
       id: string;
       productId?: string | null;
       model?: string | null;
@@ -103,10 +107,10 @@ export async function PUT(
       const updated = await prisma.quote.update({ where: { id }, data });
 
       // אישור הצעה על ליד — סימון quoteStatus על הליד
-      if (statusValue === "ACCEPTED" && (existing as any).leadId) {
+      if (statusValue === "ACCEPTED" && existingCompat.leadId) {
         await prisma.lead.update({
-          where: { id: (existing as any).leadId },
-          data: { quoteStatus: "ACCEPTED" },
+          where: { id: existingCompat.leadId },
+          data: { quoteStatus: "ACCEPTED" } as any,
         });
       }
 
@@ -238,23 +242,27 @@ export async function PUT(
         }
 
         // חישוב מחדש
-        const allItems = await tx.quoteItem.findMany({
-          where: { quoteId: id },
-        });
+        // Prisma Client בסביבה הנוכחית ישן יותר מה-schema ולכן הטיפוס שלו
+        // לא מכיר עדיין את isOptional. השדה קיים בפועל ב-schema ובמסד.
+        // שימוש ב-any כאן מבודד את חוסר הסנכרון בלי cast לא בטוח בין שני טיפוסים.
+        const allItems: Array<{ total: number; isOptional?: boolean }> =
+          await (tx.quoteItem as any).findMany({
+            where: { quoteId: id },
+          });
         const subtotal = allItems
-          .filter((i) => !i.isOptional)
+          .filter((i) => !Boolean(i.isOptional))
           .reduce((s, i) => s + Number(i.total), 0);
         const discountRaw =
           body.discountPercent != null
             ? Number(body.discountPercent)
-            : Number(existing.discountPercent);
+            : Number(existingCompat.discountPercent);
         const discountPercent = Number.isFinite(discountRaw)
           ? Math.min(Math.max(discountRaw, 0), 100)
           : 0;
         const vatRaw =
           body.vatPercent != null
             ? Number(body.vatPercent)
-            : Number(existing.vatPercent);
+            : Number(existingCompat.vatPercent);
         const vatPercent = Number.isFinite(vatRaw)
           ? Math.min(Math.max(vatRaw, 0), 100)
           : 0;
@@ -271,8 +279,8 @@ export async function PUT(
             totalBeforeDiscount: subtotal,
             tax,
             total,
-            notes: body.notes != null ? String(body.notes) : existing.notes,
-          },
+            notes: body.notes != null ? String(body.notes) : existingCompat.notes,
+          } as any,
           include: { items: { orderBy: { id: "asc" } } },
         });
       });
@@ -304,31 +312,35 @@ export async function POST(
   try {
     const { id } = await params;
     const body = await req.json().catch(() => ({}));
-    const source = await prisma.quote.findUnique({
+    const sourceRaw = await prisma.quote.findUnique({
       where: { id },
-      include: { items: { orderBy: { sortOrder: "asc" } } },
+      include: { items: true },
     });
+    const source = sourceRaw as any;
     if (!source) {
       return NextResponse.json({ error: "הצעה לא נמצאה" }, { status: 404 });
     }
 
+    // אותה שכבת תאימות נדרשת גם ליצירת גרסה חדשה.
+    const sourceCompat = source as any;
+
     // שמירת צילום מצב של הגרסה הנוכחית — המרה ל-JSON תקין (ללא אובייקטי Date)
-    await prisma.quoteVersion.create({
+    await (prisma as any).quoteVersion.create({
       data: {
-        quoteId: source.id,
-        version: source.version,
+        quoteId: sourceCompat.id,
+        version: sourceCompat.version,
         snapshot: JSON.parse(
           JSON.stringify(source, (_k, v) =>
             v instanceof Date ? v.toISOString() : v
           )
         ),
-        note: body.note || `צילום v${source.version} לפני יצירת גרסה חדשה`,
+        note: body.note || `צילום v${sourceCompat.version} לפני יצירת גרסה חדשה`,
         createdById: body.createdById || null,
-      },
+      } as any,
     });
 
     // גרסה חדשה — העתקה מלאה
-    const newVersion = source.version + 1;
+    const newVersion = sourceCompat.version + 1;
     const year = new Date().getFullYear();
 
     // מספור עם הגנה מפני כפילויות (רייס):
@@ -344,38 +356,41 @@ export async function POST(
     const copy = await prisma.quote.create({
       data: {
         number,
-        customerId: source.customerId,
-        leadId: source.leadId,
-        title: source.title,
+        customerId: sourceCompat.customerId,
+        leadId: sourceCompat.leadId,
+        title: sourceCompat.title,
         status: "DRAFT",
         version: newVersion,
-        parentQuoteId: source.id,
-        subtotal: source.subtotal,
-        discountPercent: source.discountPercent,
-        tax: source.tax,
-        vatPercent: source.vatPercent,
-        totalBeforeDiscount: source.totalBeforeDiscount,
-        total: source.total,
-        currency: source.currency,
-        validUntil: source.validUntil,
-        notes: source.notes,
-        createdById: body.createdById || source.createdById,
+        parentQuoteId: sourceCompat.id,
+        subtotal: sourceCompat.subtotal,
+        discountPercent: sourceCompat.discountPercent,
+        tax: sourceCompat.tax,
+        vatPercent: sourceCompat.vatPercent,
+        totalBeforeDiscount: sourceCompat.totalBeforeDiscount,
+        total: sourceCompat.total,
+        currency: sourceCompat.currency,
+        validUntil: sourceCompat.validUntil,
+        notes: sourceCompat.notes,
+        createdById: body.createdById || sourceCompat.createdById,
         items: {
-          create: source.items.map((i, idx) => ({
-            productId: i.productId,
-            itemType: i.itemType,
-            name: i.name,
-            model: i.model,
-            description: i.description,
-            quantity: i.quantity,
-            unitPrice: i.unitPrice,
-            total: i.total,
-            isOptional: i.isOptional,
-            recommended: i.recommended,
-            sortOrder: i.sortOrder ?? idx,
-          })),
+          create: (sourceCompat.items as any[])
+            .slice()
+            .sort((a, b) => Number(a.sortOrder ?? 0) - Number(b.sortOrder ?? 0))
+            .map((i, idx) => ({
+              productId: i.productId ?? null,
+              itemType: i.itemType ?? "PRODUCT",
+              name: i.name ?? null,
+              model: i.model ?? null,
+              description: i.description ?? "",
+              quantity: Number(i.quantity ?? 1),
+              unitPrice: Number(i.unitPrice ?? 0),
+              total: Number(i.total ?? 0),
+              isOptional: Boolean(i.isOptional),
+              recommended: Boolean(i.recommended),
+              sortOrder: i.sortOrder ?? idx,
+            })),
         },
-      },
+      } as any,
       include: { items: true },
     });
 
